@@ -74,3 +74,17 @@ int em_parser_decompose(const em_job_t *job,
     *n_tasks = count;
     return 0;
 }
+
+/* ── Vérification d'intégrité ────────────────────────────────────────────── */
+
+bool em_parser_verify(const em_task_t *tasks, size_t n_tasks, long expected_A)
+{
+    if (!tasks || n_tasks == 0)
+        return false;
+
+    long reconstructed = 0;
+    for (size_t i = 0; i < n_tasks; i++)
+        reconstructed += tasks[i].chunk_value * power10(tasks[i].position);
+
+    return (reconstructed == expected_A);
+}
