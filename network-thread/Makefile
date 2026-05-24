@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-std=gnu11 -Wall -Wextra -O2 -g
 LDLIBS=-lrt -lpthread
-SRCS=network_thread_common.c network_thread_start.c network_thread_shutdown.c
+SRCS=network_thread_common.c network_thread_run.c network_thread_stop.c
 OBJS=$(SRCS:.c=.o)
 TARGET=parallax_netthread
 .PHONY: all lib clean

@@ -1,4 +1,4 @@
-#include "network_thread_start.h"
+#include "network_thread_run.h"
 #include "network_thread_common.h"
 
 static void udp_send(net_state_t *st, struct sockaddr_in *to, const char *s)
@@ -24,7 +24,7 @@ static void handle_msg(net_state_t *st, char *buf)
     }
 }
 
-int network_thread_start(net_state_t *st, const char *config_path)
+int network_thread_run(net_state_t *st, const char *config_path)
 {
     struct mq_attr a = { .mq_maxmsg = 10, .mq_msgsize = MAX_MSG };
     memset(st, 0, sizeof(*st));
@@ -41,7 +41,7 @@ int network_thread_start(net_state_t *st, const char *config_path)
     st->mq_out = mq_open(Q_OUT, O_CREAT | O_RDONLY | O_NONBLOCK, 0666, &a);
     if (st->mq_in == (mqd_t)-1 || st->mq_out == (mqd_t)-1) return -1;
     st->running = 1;
-    log_info("started role=%s udp=%d queues=%s,%s", st->cfg.role, st->cfg.udp_port, Q_IN, Q_OUT);
+    log_info("running role=%s udp=%d queues=%s,%s", st->cfg.role, st->cfg.udp_port, Q_IN, Q_OUT);
     return 0;
 }
 
