@@ -7,6 +7,7 @@
 #include <pthread.h>  //  Nécessaire pour les threads
 #include "fonctions.h"
 
+#include<string.h>
 #define PORT 8888
 #define MASTER_ADDRESS "127.0.0.1"
 
@@ -14,54 +15,115 @@
 volatile int running = 1; 
 
 // 1. La fonction exécutée par le thread
-void *worker_thread_run(void *arg) {
-    int worker_fd = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in master_addr;
-    
-    master_addr.sin_family = AF_INET;
-    master_addr.sin_port = htons(PORT);
-    inet_pton(AF_INET, MASTER_ADDRESS, &master_addr.sin_addr);
-    
-    printf("Worker Thread : Connexion au Master... \n");
-    if (connect(worker_fd, (struct sockaddr *)&master_addr, sizeof(master_addr)) < 0) {
-        perror("Échec de la connexion ");
-        close(worker_fd);
+void *worker_thread_run(void *arg)
+{
+    int server_fd, worker_fd;
+    struct sockaddr_in addr;
+    int opt = 1;
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("bind failed");
         return NULL;
     }
-    printf("Worker Thread : Connecté ! \n");
 
-    // Une boucle qui tourne tant que worker_stop() n'est pas appelé
-    while (running) {
-        struct Task task;
-        
-        // On reçoit l'en-tête
-        int bytes_received = recv(worker_fd, &task, sizeof(task), 0);
-        if (bytes_received <= 0) {
-            printf("Master déconnecté ou erreur \n");
-            break; 
-        }
-
-        // Allocation et réception des données
-        double *data = malloc(task.data_count * sizeof(double));
-        recv(worker_fd, data, task.data_count * sizeof(double), 0);
-
-        // Exécution
-        fn fonction_calcul = matcher(task.name_function);
-        if (fonction_calcul != NULL) {
-            void *resultat = fonction_calcul(data);
-            send(worker_fd, resultat, task.data_count * sizeof(double), 0);
-        } else {
-            printf("Erreur : Fonction '%s' inconnue \n", task.name_function);
-        }
-
-        free(data);
+    if (listen(server_fd, 5) < 0) {
+        perror("listen failed");
+        return NULL;
     }
 
-    close(worker_fd);
-    printf("Worker Thread : Arrêté proprement. \n");
-    return NULL;
+    printf("Worker listening on port %d...\n", PORT);
+
+    worker_fd = accept(server_fd, NULL, NULL);
+    if (worker_fd < 0) {
+        perror("accept failed");
+        return NULL;
+    }
+
+    printf("Client connected!\n");
+
+    while (running) {
+
+    char buffer[256] = {0};
+
+    int bytes_received = recv(
+        worker_fd,
+        buffer,
+        sizeof(buffer) - 1,
+        0
+    );
+
+    if (bytes_received <= 0) {
+        printf("Client déconnecté ou erreur\n");
+        break;
+    }
+
+    buffer[bytes_received] = '\0';
+
+    printf("Message reçu : %s\n", buffer);
+
+    /*
+     * Expected format:
+     * add 42
+     * square 9
+     */
+
+    char function_name[64] = {0};
+    int value = 0;
+
+    int parsed = sscanf(buffer, "%63s %d",
+                        function_name,
+                        &value);
+
+    if (parsed != 2) {
+        printf("Format invalide\n");
+
+        const char *err = "Format invalide\n";
+        send(worker_fd, err, strlen(err), 0);
+        continue;
+    }
+
+    fn fonction_calcul = matcher(function_name);
+
+    if (fonction_calcul != NULL) {
+
+        int *result = (int *)fonction_calcul(&value);
+
+        char response[128];
+
+        snprintf(response,
+                 sizeof(response),
+                 "Résultat = %d\n",
+                 *result);
+
+        send(worker_fd,
+             response,
+             strlen(response),
+             0);
+
+    } else {
+
+        const char *err = "Fonction inconnue\n";
+
+        send(worker_fd,
+             err,
+             strlen(err),
+             0);
+    }
 }
 
+    close(worker_fd);
+    close(server_fd);
+
+    return NULL;
+}
 // 2. La fonction pour arrêter le Worker
 void worker_stop() {
     printf("Signal d'arrêt reçu... \n");

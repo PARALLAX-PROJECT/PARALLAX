@@ -3,7 +3,8 @@
 #include "fonctions.h" 
 
 void *add(void *arg) {
-    printf("Instance du Worker : Exécution de la fonction ADD \n");
+    int * value=(int * )arg;
+    printf("Running worker with value %d \n",*value);
     return arg; 
 }
 
