@@ -5,14 +5,12 @@
 #include "state_message.h"
 
 // ================OS DETECTION========================
-#if defined(_WIN32) || defined(_WIN64)
+#if (defined(_WIN32) || defined(_WIN64)) && !defined(OS_WINDOWS)
     #define OS_WINDOWS
-#elif defined(__APPLE__) || defined(__MACH__)
+#elif (defined(__APPLE__) || defined(__MACH__)) && !defined(OS_MACOS)
     #define OS_MACOS
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(OS_LINUX)
     #define OS_LINUX
-#else
-    #error "Unsupported OS"
 #endif
 
 #define MONITORING_INTERVAL 5

@@ -127,6 +127,9 @@ static void stop_threads(void) {
                 agent.threads.state_receiver_active = 0;
                 printf("[THREAD] State Receiver thread stopped\n");
             }
+            break;
+        default:
+            printf("[THREAD] No role-specific threads to stop for ROLE_UNKNOWN\n");
             break;           
     }
 

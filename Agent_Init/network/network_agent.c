@@ -149,7 +149,6 @@ void *socket_listener(void *args) {
       if (data_read != (ssize_t)item.size) {
         close(client_fd);
         continue;
-      https: // github.com/NchangRoy/PARALLAX
       }
     }
 
@@ -240,8 +239,9 @@ void *socket_sender(void *args) {
  * les threads d'ecoute et d'envoi sans bloquer l'appelant.
  */
 void *network_thread_run(void *args) {
+  (void)args;
   if (atomic_exchange(&agent_started, 1))
-    return;
+    return NULL;
 
   atomic_store(&agent_running, 1);
 
@@ -250,14 +250,14 @@ void *network_thread_run(void *args) {
   if (local_connection == NULL) {
     atomic_store(&agent_running, 0);
     atomic_store(&agent_started, 0);
-    return;
+    return NULL;
   }
 
   // create recieving message queue to store outgoing messages
   if (create_mq("outgoing", NETWORK_AGENT_MAX_DATA) == NULL) {
     atomic_store(&agent_running, 0);
     cleanup_agent();
-    return;
+    return NULL;
   }
 
   map_entry *outgoing_mq = find_by_msg_type("outgoing");
@@ -267,7 +267,7 @@ void *network_thread_run(void *args) {
                      (void *)local_connection) != 0) {
     atomic_store(&agent_running, 0);
     cleanup_agent();
-    return;
+    return NULL;
   }
 
   // start thread to listen for messages in outgoing mq and send them
@@ -279,8 +279,9 @@ void *network_thread_run(void *args) {
     local_connection->sockfd = -1;
     pthread_join(listener_thread, NULL);
     cleanup_agent();
-    return;
+    return NULL;
   }
+  return NULL;
 }
 
 /*

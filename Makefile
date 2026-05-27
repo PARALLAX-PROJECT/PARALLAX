@@ -6,10 +6,8 @@ TARGET  = parallax_agent
 SRCS = main.c \
        Agent_Init/init.c \
        Agent_Init/monitoring/Monitoring.c \
-	   Agent_Init/network/network_agent.c \
-	   Controller/state_receiver/state_receiver.c \
-	   Controller/state_receiver/persistence.c \
-	   Controller/state_receiver/node_table.c \
+	   Agent_Init/network/*.c \
+	   Controller/state_receiver/*.c \
 
 # Détection OS
 UNAME := $(shell uname)
@@ -38,7 +36,7 @@ INCLUDES = -I./Agent_Init \
 all: $(TARGET)
 
 $(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) $(INCLUDES) $(SRCS) -o $(TARGET) $(LDFLAGS)
+	$(CC) $(CFLAGS)  $(SRCS) $(INCLUDES) -o $(TARGET) $(LDFLAGS)
 
 clean:
 	rm -f $(TARGET)
