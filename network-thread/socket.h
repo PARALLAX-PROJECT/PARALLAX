@@ -4,6 +4,7 @@
 
 typedef struct {
     uint64_t type;
+    uint64_t recv_type;
     uint64_t size;
     char data[];
 } message_t;

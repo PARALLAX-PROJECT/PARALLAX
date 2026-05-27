@@ -22,18 +22,27 @@ static void destroy_map_entry(void *data)
  * Cree une queue System V associee a un type de message logique.
  * L'association msg_type -> msgid est conservee dans la registry globale.
  */
-int create_mq(char *msg_type, int msg_len)
+char * create_mq(char *msg_type, int msg_len)
 {       
     //initiliaze map registry for mapping queue to msg  type
     if (registry == NULL) {
-        registry = malloc(sizeof(map_registry));
-        if (!registry) return -1;
+        registry =(map_registry *) malloc(sizeof(map_registry));
+        if (!registry) return NULL;
 
         registry->counter = 0;
         registry->base_path = "/tmp";
         registry->head = NULL;
     }
-
+    char random_msg_type[64];
+    if(msg_type==NULL){
+        const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        for (int i = 0; i < 63; i++) {
+            int key = rand() % (int)(sizeof(charset) - 1);
+            random_msg_type[i] = charset[key];
+        }
+        random_msg_type[63] = '\0';
+        msg_type = random_msg_type;
+    }
     int id = registry->counter++;
     //create key
     key_t key = ftok(registry->base_path, (int)(id & 0xFF));
@@ -41,11 +50,11 @@ int create_mq(char *msg_type, int msg_len)
     int msgid = msgget(key, IPC_CREAT | 0666);
     if (msgid < 0) {
         perror("Error creating queue");
-        return -1;
+        return NULL;
     }
     //save to map registry
-    map_entry *entry = malloc(sizeof(map_entry));
-    if (!entry) return -1;
+    map_entry *entry = (map_entry *)malloc(sizeof(map_entry));
+    if (!entry) return NULL;
 
     strncpy(entry->mq_path, registry->base_path, sizeof(entry->mq_path));
     entry->mq_path[sizeof(entry->mq_path)-1] = '\0';
@@ -64,7 +73,7 @@ int create_mq(char *msg_type, int msg_len)
         push_back(registry->head, new_node);
     }
 
-    return msgid;
+    return entry->msg_type;
 }
 
 
