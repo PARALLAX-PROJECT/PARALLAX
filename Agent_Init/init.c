@@ -1,8 +1,7 @@
 #include "init.h"
 
 #include "monitoring/Monitoring.h"
-#include "../network/network_thread_start.h"
-#include "../network/network_thread_shutdown.h"
+#include "../network/network_agent.h"
 #include "../Controller/state_receiver/state_receiver.h"
 
 #include <stdio.h>
