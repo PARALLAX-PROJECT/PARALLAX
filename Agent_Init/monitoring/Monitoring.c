@@ -14,12 +14,16 @@
 #include <unistd.h>
 #include <time.h>
 #include <pthread.h>
+#include "../network/network_agent.h"
+#include "../init.h"
 
 // Global variables (Private State)
 static MachineMetrics latest_metrics;
 static pthread_mutex_t metrics_mutex = PTHREAD_MUTEX_INITIALIZER;
 static volatile int monitoring_running = 1;
 static int first_run = 1;
+static int heartbeat_sent = 0;    // Track if HEARTBEAT_INIT has been sent
+static int msg_count = 0;         // Track number of messages sent
 
 void *monitoring_thread_run(void *arg){
     (void)arg; // avoids warning "Unused parameter"
@@ -44,11 +48,47 @@ void *monitoring_thread_run(void *arg){
 
         // Update timestamp
         m.timestamp = time(NULL);
+        
+        // Fill UUID from agent
+        strncpy(m.uuid, get_agent_uuid(), sizeof(m.uuid) - 1);
 
         // Update global state
         pthread_mutex_lock(&metrics_mutex);
         latest_metrics = m;
         pthread_mutex_unlock(&metrics_mutex);
+        
+        // ═══ SEND MESSAGES ═══
+        // Phase 1: Send HEARTBEAT_INIT (with static + dynamic metrics) once after 1st collection
+        if (!heartbeat_sent) {
+            m.type = MSG_HEARTBEAT_INIT;
+            
+            message_t *pkt = (message_t *)malloc(sizeof(message_t) + sizeof(MachineMetrics));
+            if (pkt) {
+                pkt->type = MSG_HEARTBEAT_INIT;
+                pkt->size = sizeof(MachineMetrics);
+                memcpy(pkt->data, &m, sizeof(MachineMetrics));
+                send_msg("127.0.0.1", 9001, pkt);
+                free(pkt);
+                heartbeat_sent = 1;
+                msg_count++;
+                printf("[MONITORING] MSG_HEARTBEAT_INIT sent (msg #%d)\n", msg_count);
+            }
+        }
+        // Phase 2+: Send HEARTBEAT (dynamic metrics only) regularly
+        else {
+            m.type = MSG_HEARTBEAT;
+            
+            message_t *pkt = (message_t *)malloc(sizeof(message_t) + sizeof(MachineMetrics));
+            if (pkt) {
+                pkt->type = MSG_HEARTBEAT;
+                pkt->size = sizeof(MachineMetrics);
+                memcpy(pkt->data, &m, sizeof(MachineMetrics));
+                send_msg("127.0.0.1", 9001, pkt);
+                free(pkt);
+                msg_count++;
+                printf("[MONITORING] MSG_HEARTBEAT sent (msg #%d)\n", msg_count);
+            }
+        }
 
         sleep(MONITORING_INTERVAL);
     }
