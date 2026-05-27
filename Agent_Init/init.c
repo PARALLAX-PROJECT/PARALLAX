@@ -3,10 +3,7 @@
 #include "monitoring/Monitoring.h"
 #include "../network/network_thread_start.h"
 #include "../network/network_thread_shutdown.h"
-#include "../Worker/execution/fonctions.h"
 #include "../Controller/state_receiver/state_receiver.h"
-#include "../Master/orchestrator/orchestrator.h"
-#include "../Master/execution_master/execution_master.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,44 +105,12 @@ static void start_threads(void){
 
     // ===== ROLE-SPECIFIC THREADS =====
     switch (agent.role) {
-    case ROLE_WORKER:
-        if (!agent.threads.execution_active) {
-            pthread_create(&agent.threads.execution, NULL, execution_thread_run, NULL);
-            agent.threads.execution_active = 1;
-            printf("[THREAD] Execution thread started\n");
-        }
-        break;
-
     case ROLE_CONTROLLER:
         if (!agent.threads.state_receiver_active) {
             pthread_create(&agent.threads.state_receiver, NULL, state_receiver_thread_run, NULL);
             agent.threads.state_receiver_active = 1;
             printf("[THREAD] State Receiver thread started\n");
         }
-
-        /*if (!agent.threads.breakdown_active) {
-            pthread_create(&agent.threads.breakdown, NULL, breakdown_thread_run, NULL);
-            agent.threads.breakdown_active = 1;
-            printf("[THREAD] Breakdown thread started\n");
-        }*/
-        break;
-
-    case ROLE_MASTER:
-        /*if (!agent.threads.orchestrator_active) {
-            pthread_create(&agent.threads.orchestrator, NULL, orchestrator_thread_run, NULL);
-            agent.threads.orchestrator_active = 1;
-            printf("[THREAD] Orchestrator thread started\n");
-        }*/
-        if (!agent.threads.parser_active) {
-            pthread_create(&agent.threads.parser, NULL, execution_master_thread_run, NULL);
-            agent.threads.parser_active = 1;
-            printf("[THREAD] Execution Master thread started\n");
-        }
-        /*if (!agent.threads.breakdown_active) {
-            pthread_create(&agent.threads.breakdown, NULL, breakdown_thread_run, NULL);
-            agent.threads.breakdown_active = 1;
-            printf("[THREAD] Breakdown thread started\n");
-        }*/
         break;
     
     default:
@@ -155,16 +120,7 @@ static void start_threads(void){
 }
 
 static void stop_threads(void) {
-    switch (agent.role) {
-        case ROLE_WORKER:
-            if (agent.threads.execution_active) {
-                execution_stop();
-                pthread_join(agent.threads.execution, NULL);
-                agent.threads.execution_active = 0;
-                printf("[THREAD] Execution thread stopped\n");
-            }
-            break;
-    
+    switch (agent.role) {  
         case ROLE_CONTROLLER:
             if (agent.threads.state_receiver_active) {
                 state_receiver_stop();
@@ -172,37 +128,7 @@ static void stop_threads(void) {
                 agent.threads.state_receiver_active = 0;
                 printf("[THREAD] State Receiver thread stopped\n");
             }
-            if (agent.threads.breakdown_active) {
-                breakdown_stop();
-                pthread_join(agent.threads.breakdown, NULL);
-                agent.threads.breakdown_active = 0;
-                printf("[THREAD] Breakdown thread stopped\n");
-            }
-            break;
-
-        case ROLE_MASTER:
-            if (agent.threads.orchestrator_active) {
-                orchestrator_stop();
-                pthread_join(agent.threads.orchestrator, NULL);
-                agent.threads.orchestrator_active = 0;
-                printf("[THREAD] Orchestrator thread stopped\n");
-            }
-            if (agent.threads.parser_active) {
-                execution_master_stop();
-                pthread_join(agent.threads.parser, NULL);
-                agent.threads.parser_active = 0;
-                printf("[THREAD] Execution Master thread stopped\n");
-            }
-            if (agent.threads.breakdown_active) {
-                breakdown_stop();
-                pthread_join(agent.threads.breakdown, NULL);
-                agent.threads.breakdown_active = 0;
-                printf("[THREAD] Breakdown thread stopped\n");
-            }
-            break;
-
-        default:
-            break;
+            break;           
     }
 
     // Stop common threads

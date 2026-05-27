@@ -21,30 +21,22 @@ typedef enum {
 // ===== THREADS =====
 typedef struct {
     // For Worker only
-    pthread_t execution;
 
     // For Controller only
     pthread_t state_receiver;
 
     // For Master only
-    pthread_t orchestrator;
-    pthread_t parser;
 
     // For Controller + Master
-    pthread_t breakdown;
 
     // In common
     pthread_t monitoring;
     pthread_t network;
 
     // Activity flags
+    int state_receiver_active;
     int monitoring_active;
     int network_active;
-    int execution_active;
-    int state_receiver_active;
-    int breakdown_active;
-    int orchestrator_active;
-    int parser_active; 
 } AgentThreads;
 
 // ===== AGENT STATE =====
