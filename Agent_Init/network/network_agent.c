@@ -15,7 +15,6 @@
 #define NETWORK_AGENT_MTYPE 1L
 #define NETWORK_AGENT_MAX_DATA 65536
 
-
 static pthread_t listener_thread;
 static pthread_t sender_thread;
 static connection *local_connection = NULL;

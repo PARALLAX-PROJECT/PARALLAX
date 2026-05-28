@@ -64,9 +64,23 @@ static void load_or_create_uuid(void) {
     }
 }
 
-// Temporary hello message to verify network functionality
+// Send HELLO message to Controller to announce presence
 static void send_hello(void) {
-    printf("[NETWORK] HELLO uuid=%s\n", agent.uuid);
+    MachineMetrics msg;
+    memset(&msg, 0, sizeof(MachineMetrics));
+    
+    strncpy(msg.uuid, agent.uuid, sizeof(msg.uuid) - 1);
+    msg.type = MSG_HELLO;
+    
+    message_t *pkt = (message_t *)malloc(sizeof(message_t) + sizeof(MachineMetrics));
+    if (pkt) {
+        pkt->type = MSG_HELLO;
+        pkt->size = sizeof(MachineMetrics);
+        memcpy(pkt->data, &msg, sizeof(MachineMetrics));
+        send_msg("192.168.50.1", 9000, pkt);
+        free(pkt);
+        printf("[INIT] HELLO sent: uuid=%s\n", agent.uuid);
+    }
 }
 
 static AgentRole read_role(void) {
@@ -182,18 +196,24 @@ void initialize_agent(void){
     // 1. Load or create UUID
     load_or_create_uuid();
 
-    // 2. Announce presence (temporary hello message)
-    send_hello();
-
-    // 3. Read initial role from config
+    // 2. Read initial role from config
     agent.role = read_role();
     printf("[INIT] Initial role: %d\n", agent.role);
 
-    // 4. Start threads based on role
+    // 3. Start threads based on role
     start_threads();
+    
+    // 4. Send HELLO after network thread is started (queue exists)
+    // Give network thread time to initialize
+    sleep(1);
+    send_hello();
 
     // 5. Start config watcher in main thread (blocking)
     watch_config();
+}
+
+char* get_agent_uuid(void) {
+    return agent.uuid;
 }
 
 void stop_agent(void){

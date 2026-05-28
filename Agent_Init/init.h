@@ -48,6 +48,8 @@ typedef struct {
 
 // ===== PUBLIC FUNCTIONS =====
 void initialize_agent(void);
+char* get_agent_uuid(void);
+void stop_agent(void);
 void stop_agent(void);
 
 #endif // INIT_H
