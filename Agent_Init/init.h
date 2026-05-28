@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <sys/stat.h>
+#include "state_message.h"
 
 // ===== CONSTANTS =====
 #define UUID_FILE "./parallax/parallax_uuid.dat"
@@ -47,6 +48,7 @@ typedef struct {
 } AgentState;
 
 // ===== PUBLIC FUNCTIONS =====
+void get_local_ip(MachineMetrics *m,char * iface_name);
 void initialize_agent(void);
 char* get_agent_uuid(void);
 void stop_agent(void);

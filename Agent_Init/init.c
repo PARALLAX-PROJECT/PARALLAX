@@ -47,30 +47,157 @@ static void generate_uuid(char *uuid){
 
 }
 
+void get_local_ip(MachineMetrics *m,char * iface_name) {
+    char command[128];
+    snprintf(command, sizeof(command), "ip addr show %s", iface_name);
+
+    FILE *fp = popen(command, "r");
+    if (!fp) {
+        strncpy(m->ip, "0.0.0.0", sizeof(m->ip) - 1);
+        return;
+    }
+
+    char line[512];
+
+    while (fgets(line, sizeof(line), fp)) {
+        // Cherche "inet "
+        char *inet_pos = strstr(line, "inet ");
+        if (inet_pos) {
+            inet_pos += 5; // avancer après "inet "
+
+            // Copier jusqu'au '/'
+            char *slash = strchr(inet_pos, '/');
+            if (slash) {
+                size_t len = slash - inet_pos;
+                if (len < sizeof(m->ip)) {
+                    strncpy(m->ip, inet_pos, len);
+                    m->ip[len] = '\0';
+                }
+                break;
+            }
+        }
+    }
+
+    pclose(fp);
+
+    // fallback si rien trouvé
+    if (strlen(m->ip) == 0) {
+        strncpy(m->ip, "0.0.0.0", sizeof(m->ip) - 1);
+    }
+}
+
 static void load_or_create_uuid(void) {
     FILE *f = fopen(UUID_FILE, "r");
+    int uuid_loaded = 0;
+    
     if (f) {
-        fscanf(f, "%36s", agent.uuid);
+        char temp_uuid[UUID_LENGTH];
+        int read = fscanf(f, "%36s", temp_uuid);
         fclose(f);
-        printf("[INIT] UUID loaded: %s\n", agent.uuid);
-    } else {
+        
+        // Check if UUID was actually read and not empty
+        if (read == 1 && strlen(temp_uuid) > 0) {
+            strncpy(agent.uuid, temp_uuid, UUID_LENGTH - 1);
+            agent.uuid[UUID_LENGTH - 1] = '\0';
+            printf("[INIT] UUID loaded from file: %s\n", agent.uuid);
+            uuid_loaded = 1;
+        }
+    }
+    
+    // If not loaded, generate new UUID
+    if (!uuid_loaded) {
         generate_uuid(agent.uuid);
+        printf("[INIT] UUID generated (new): %s\n", agent.uuid);
+        
+        // Save to file
         f = fopen(UUID_FILE, "w");
         if (f) {
             fprintf(f, "%s", agent.uuid);
             fclose(f);
+            printf("[INIT] UUID saved to file\n");
         }
-        printf("[INIT] UUID generated: %s\n", agent.uuid);
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  FONCTION DEBUG - AFFICHAGE DES DONNÉES ENVOYÉES
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Affiche tous les détails des métriques avant envoi (UUID et données d'état)
+ */
+static void debug_print_sent_metrics(MachineMetrics* m, const char* msg_type) {
+    if (!m) return;
+    
+    char timestamp_str[64];
+    struct tm* timeinfo = localtime(&m->timestamp);
+    strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S", timeinfo);
+    
+    printf("\n");
+    printf("╔════════════════════════════════════════════════════════════════════╗\n");
+    printf("║ [SENDING] Message Type: %-53s ║\n", msg_type);
+    printf("╚════════════════════════════════════════════════════════════════════╝\n");
+    
+    printf("  ▼ IDENTITÉ\n");
+    printf("    • UUID:      %s\n", m->uuid);
+    printf("    • IP:        %s:%d\n", m->ip, m->port);
+    printf("    • Timestamp: %s (%ld)\n", timestamp_str, m->timestamp);
+    printf("    • Type:      %d\n", m->type);
+    
+    printf("  ▼ CPU\n");
+    printf("    • Usage:           %.2f%%\n", m->cpu_usage);
+    printf("    • Load Average:    %.2f, %.2f, %.2f\n", m->load_avg[0], m->load_avg[1], m->load_avg[2]);
+    printf("    • Cores:           %d\n", m->cpu_cores);
+    printf("    • Threads/Core:    %d\n", m->cpu_threads_per_core);
+    printf("    • Frequency:       %.2f MHz\n", m->cpu_freq_mhz);
+    printf("    • Model:           %s\n", m->cpu_model);
+    
+    printf("  ▼ MÉMOIRE (RAM)\n");
+    printf("    • Usage:           %.2f%%\n", m->mem_usage);
+    printf("    • Available:       %.2f MB\n", m->mem_available_mb);
+    printf("    • Used:            %ld MB\n", m->mem_used_mb);
+    printf("    • Total:           %ld MB\n", m->mem_total_mb);
+    
+    printf("  ▼ DISQUE\n");
+    printf("    • Usage:           %.2f%%\n", m->disk_usage);
+    printf("    • Used:            %ld MB\n", m->disk_used_mb);
+    printf("    • Total:           %ld MB\n", m->disk_total_mb);
+    printf("    • Mount Point:     %s\n", m->disk_mount);
+    
+    printf("  ▼ RÉSEAU\n");
+    printf("    • Bandwidth:       %.2f Mbps\n", m->network_bandwidth_mbps);
+    printf("    • Connections:     %d\n", m->active_connections);
+    printf("    • Interface:       %s\n", m->network_iface);
+    
+    printf("  ▼ SYSTÈME\n");
+    printf("    • Active Processes:    %d\n", m->active_processes);
+    printf("    • Context Switch Rate: %.2f/s\n", m->context_switch_rate);
+    printf("    • Uptime:              %ld seconds\n", m->uptime_seconds);
+    printf("    • Is Overloaded:       %s\n", m->is_overloaded ? "YES" : "NO");
+    
+    printf("  ▼ CALCULS\n");
+    printf("    • Queue Length: %d\n", m->queue_len);
+    printf("    • Score:        %.2f\n", m->score);
+    
+    printf("╔════════════════════════════════════════════════════════════════════╗\n\n");
 }
 
 // Send HELLO message to Controller to announce presence
 static void send_hello(void) {
-    MachineMetrics msg;
-    memset(&msg, 0, sizeof(MachineMetrics));
+    // Get latest metrics to include in HELLO message
+    MachineMetrics msg = monitoring_get_latest();
     
+    // Ensure UUID is set
     strncpy(msg.uuid, agent.uuid, sizeof(msg.uuid) - 1);
     msg.type = MSG_HELLO;
+    msg.timestamp = time(NULL);
+    
+    // Set IP and port (hardcoded for now, can be made dynamic later)
+    get_local_ip(&msg, "wlo1"); // Assuming eth0 is the primary interface
+    msg.port = 9000;  // Default worker listening port
+    
+    // DEBUG: Afficher les données avant envoi
+    debug_print_sent_metrics(&msg, "MSG_HELLO");
     
     message_t *pkt = (message_t *)malloc(sizeof(message_t) + sizeof(MachineMetrics));
     if (pkt) {
