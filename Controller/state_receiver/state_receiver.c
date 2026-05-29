@@ -13,6 +13,7 @@
 #include "persistence.h"
 #include "ms_queue.h"
 #include "network_agent.h"
+#include "../../Agent_Init/init.h"
 
 
 
@@ -419,8 +420,12 @@ void * hello_func(void * arg){
         register_node(msg);
         printf("received a HELLO message\n");
         
-        // Reply with our IP on the same type
-        char my_ip[16] = "192.168.201.156";
+        // Reply with our IP dynamically
+        char iface[64] = {0};
+        char my_ip[16] = {0};
+        
+        load_network_interface(iface, sizeof(iface));
+        get_local_ip(my_ip, sizeof(my_ip), iface);
         
         message_t *reply = malloc(sizeof(message_t) + 64);
         strcpy(reply->type, HELLO_TYPE);
