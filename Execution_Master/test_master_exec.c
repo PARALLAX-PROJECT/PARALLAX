@@ -28,7 +28,7 @@ int main() {
         values[i] = i;
     }
 
-    int expected_node_count = 1; // Assuming 1 node for testing
+    int expected_node_count = 2; // Testing 2 nodes
     
     printf("\n[TestExec] Calling execute_fxn to request %d node(s) and distribute task...\n", expected_node_count);
     printf("[TestExec] ⏳ WAITING for Controller at %s:9000 to respond to NODES query...\n", controller_ip);

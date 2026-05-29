@@ -115,7 +115,7 @@ int send_prog_message_and_wait(char *ip, int port, char *task_mq_name) {
     return 0;
 }
 
-int send_task_message_and_wait(char *ip, int port, const char *task_mq_name, chunk_data *chunk) {
+int send_task_message_and_wait(char *ip, int port, const char *task_mq_name, chunk_data *chunk, void **result_ptr) {
     size_t task_size = sizeof(recv_task_t) + chunk->chunk_size;
     
     recv_task_t *task = malloc(task_size);
@@ -152,6 +152,11 @@ int send_task_message_and_wait(char *ip, int port, const char *task_mq_name, chu
 
     message_t *resp = (message_t *)&resp_msg;
     printf("[Master] Task result: %s\n", resp->data);
+
+    // Save partial result to the array via the provided pointer
+    if (result_ptr) {
+        *result_ptr = strdup((char *)resp->data);
+    }
     return 0;
 }
 
@@ -213,7 +218,7 @@ void *thread_func_test(void *arg){
     }
 
     printf("Sending task payload to worker task queue: %s\n", task_mq_name);
-    if (send_task_message_and_wait(param->exec_node->ip, param->exec_node->port, task_mq_name, param->chunk) < 0) {
+    if (send_task_message_and_wait(param->exec_node->ip, param->exec_node->port, task_mq_name, param->chunk, param->result_ptr) < 0) {
         printf("Failed to send task.\n");
     }
     barrier_wait(param->barrier);
@@ -268,9 +273,9 @@ team *  team_init( int nb_threads) {
     
     new_team->num_workers = nb_threads;
 
-    new_team->workers =    malloc(sizeof(worker_t) * nb_threads);
-
+    new_team->workers = malloc(sizeof(worker_t) * nb_threads);
     new_team->barrier = barrier_init(nb_threads);
+    new_team->results = calloc(nb_threads, sizeof(void *));
 
     for (int i = 0; i < nb_threads; i++) {
 
@@ -284,6 +289,7 @@ team *  team_init( int nb_threads) {
         context->tid=i;
         context->barrier=new_team->barrier;
         context->chunk=NULL;
+        context->result_ptr = &new_team->results[i]; // Bind array slot
        
         new_team->workers[i].context=context;
           
@@ -292,11 +298,7 @@ team *  team_init( int nb_threads) {
     
 
     new_team->reduce_fxn = NULL;
-
     new_team->tasks = NULL;
-
-    new_team->results =
-        malloc(sizeof(void *) * nb_threads);
 
     return new_team;
 }

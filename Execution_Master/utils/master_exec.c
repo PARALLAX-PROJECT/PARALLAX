@@ -99,22 +99,23 @@ void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count
     team_start(t);
 
     team_wait(t);
-    //first join results
 
-    //logic to aggregate results
-
+    // Aggregate results from each thread
+    printf("\n=================================\n");
+    printf("AGGREGATED EXECUTION RESULTS\n");
+    printf("=================================\n");
     
-    
+    for (int i = 0; i < t->num_workers; i++) {
+        if (t->results[i]) {
+            printf("Node %d partial result: %s\n", i, (char *)t->results[i]);
+            free(t->results[i]); // Free the duplicated string
+            t->results[i] = NULL;
+        } else {
+            printf("Node %d partial result: (null)\n", i);
+        }
+    }
+    printf("=================================\n\n");
 
     team_destroy(t);
-
-
-    
-
-
-    
-
-    
-
 }
 

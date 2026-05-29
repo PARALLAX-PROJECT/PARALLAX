@@ -28,6 +28,7 @@ typedef struct {
     char function_name[64];
     chunk_data * chunk;
     worker_node * exec_node;
+    void ** result_ptr;
 } worker_context;
 
 
