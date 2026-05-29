@@ -430,7 +430,7 @@ void * hello_func(void * arg){
         
         printf("Replying to HELLO with our IP: %s directly to agent at %s:%d\n", my_ip, msg->ip, msg->port);
         // Reply directly via reliable TCP unicast to the agent instead of a broadcast
-        send_msg(msg->ip, msg->port, NULL, reply);
+        send_broadcast_message(9001, reply);
         free(reply);
     }
     return NULL;
