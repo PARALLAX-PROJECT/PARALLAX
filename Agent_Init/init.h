@@ -48,6 +48,7 @@ typedef struct {
 } AgentState;
 
 // ===== PUBLIC FUNCTIONS =====
+static void load_network_interface(MachineMetrics *m);
 void get_local_ip(MachineMetrics *m,char * iface_name);
 void initialize_agent(void);
 char* get_agent_uuid(void);

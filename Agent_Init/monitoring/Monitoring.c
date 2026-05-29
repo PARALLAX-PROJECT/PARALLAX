@@ -119,7 +119,7 @@ void *monitoring_thread_run(void *arg){
         strncpy(m.uuid, get_agent_uuid(), sizeof(m.uuid) - 1);
         
         // Fill IP and port (hardcoded for now, can be made dynamic later)
-        get_local_ip(&m, "wlo1");
+        get_local_ip(&m, m.network_iface);
         m.port = 9000;  // Default worker listening port
 
         // Update global state
