@@ -3,6 +3,8 @@
 
 #include"task.h"
 #include "node_details.h"
+#include "../../parallax/state_message.h"
+
 
 /*
  * Describes the computation to execute.
@@ -33,7 +35,7 @@ create_assignments(
     void *data,
     size_t total_size,
     const char *function,
-    NodeInfo *nodes,
+    MachineMetrics *metrics,
     int node_count
 );
 
