@@ -4,6 +4,8 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 
 /*
  * Cree une connexion TCP sortante vers l'adresse IP et le port donnes.
@@ -78,7 +80,7 @@ connection *create_listener(char *Ip, int port, int backlog)
     addr.sin_port = htons(port);
 
     // 👉 LOCAL DEFAULT
-    const char *bind_ip = (Ip == NULL) ? "127.0.0.1" : Ip;
+   const char *bind_ip = (Ip == NULL) ? "0.0.0.0" : Ip;
 
     if (inet_pton(AF_INET, bind_ip, &addr.sin_addr) <= 0) {
         perror("inet_pton");
@@ -128,6 +130,65 @@ int send_message(connection *connection, message_t *message)
 
     if (sent != (ssize_t)total_size) {
         perror("write");
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Envoie un message de broadcast UDP sur le port donne.
+ */
+int send_broadcast_message(int port, message_t *message)
+{
+    if (!message) return -1;
+
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("socket broadcast");
+        return -1;
+    }
+
+    int broadcastEnable = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
+        perror("setsockopt SO_BROADCAST");
+        close(sockfd);
+        return -1;
+    }
+
+    struct ifaddrs *ifap, *ifa;
+    if (getifaddrs(&ifap) == -1) {
+        perror("getifaddrs");
+        close(sockfd);
+        return -1;
+    }
+
+    size_t total_size = sizeof(message_t) + message->size;
+    int success = 0;
+
+    for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        if (ifa->ifa_addr->sa_family != AF_INET) continue;
+        if (!(ifa->ifa_flags & IFF_BROADCAST)) continue;
+        if (!(ifa->ifa_flags & IFF_UP)) continue;
+
+        struct sockaddr_in broadcastAddr;
+        memcpy(&broadcastAddr, ifa->ifa_broadaddr, sizeof(struct sockaddr_in));
+        broadcastAddr.sin_port = htons(port);
+
+        ssize_t sent = sendto(sockfd, message, total_size, 0, (struct sockaddr *)&broadcastAddr, sizeof(broadcastAddr));
+        if (sent == (ssize_t)total_size) {
+            success = 1;
+        } else {
+            perror("sendto broadcast specific interface");
+        }
+    }
+
+    freeifaddrs(ifap);
+    close(sockfd);
+
+    if (!success) {
+        fprintf(stderr, "Failed to broadcast on any active interface\n");
         return -1;
     }
 

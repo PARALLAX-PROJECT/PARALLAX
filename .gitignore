@@ -1,7 +1,10 @@
 /build
-/test
+/.vscode
 /Testing2
-/network_agent
-.vscode
-.vscode/
-.DS_Store
+/Worker_execution_Module
+/test
+parallax_agent
+
+# Ignore auto-generated controller data files
+Controller/parallax_data/nodes/*.json
+Controller/parallax_data/metrics/*.csv

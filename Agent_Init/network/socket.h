@@ -3,8 +3,9 @@
 #include<stdint.h>
 
 typedef struct {
-    uint64_t type;
-    uint64_t recv_type;
+    long mq_type;
+    char type[64];
+    char recv_type[64];
     uint64_t size;
     char data[];
 } message_t;
@@ -26,6 +27,6 @@ typedef struct {
 connection *create_listener(char *Ip, int port, int backlog);
 connection *create_connection(char *Ip, int port);
 int send_message(connection *connection, message_t *message);
-
+int send_broadcast_message(int port, message_t *message);
 
 #endif
