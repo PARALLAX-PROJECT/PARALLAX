@@ -72,17 +72,30 @@ int send_prog_message_and_wait(char *ip, int port, char *task_mq_name) {
       "\n"
       "typedef void *(*fn)(void *);\n"
       "\n"
-      "void *my_test_function(void *arg) {\n"
-      "    char *input = (char*)arg;\n"
-      "    printf(\"Executing my_test_function with data: %s\\n\", input);\n"
-      "    char *result = malloc(strlen(input) + 64);\n"
-      "    sprintf(result, \"Processed data: [%s]\", input);\n"
+      "void *sum_array(void *arg) {\n"
+      "    char *filename = (char*)arg;\n"
+      "    FILE *f = fopen(filename, \"rb\");\n"
+      "    if (!f) return strdup(\"0\");\n"
+      "    fseek(f, 0, SEEK_END);\n"
+      "    long size = ftell(f);\n"
+      "    fseek(f, 0, SEEK_SET);\n"
+      "    int count = size / sizeof(int);\n"
+      "    int *arr = malloc(size);\n"
+      "    fread(arr, sizeof(int), count, f);\n"
+      "    fclose(f);\n"
+      "    long long sum = 0;\n"
+      "    for(int i = 0; i < count; i++) {\n"
+      "        sum += arr[i];\n"
+      "    }\n"
+      "    free(arr);\n"
+      "    char *result = malloc(64);\n"
+      "    sprintf(result, \"%lld\", sum);\n"
       "    return result;\n"
       "}\n"
       "\n"
       "fn matcher(char *name) {\n"
-      "    if (strcmp(name, \"my_test_function\") == 0) {\n"
-      "        return my_test_function;\n"
+      "    if (strcmp(name, \"sum_array\") == 0) {\n"
+      "        return sum_array;\n"
       "    }\n"
       "    return NULL;\n"
       "}\n"
@@ -131,7 +144,7 @@ int send_task_message_and_wait(char *ip, int port, const char *task_mq_name,
   recv_task_t *task = malloc(task_size);
   memset(task, 0, task_size);
   strcpy(task->function_name, function_name);
-  task->data_count = 1;
+  task->data_count = chunk->chunk_size;
   memcpy(task->data, chunk->chunk, chunk->chunk_size);
 
   size_t total_size = sizeof(message_t) + task_size;
@@ -339,6 +352,17 @@ void team_destroy(team *t) {
   free(t->barrier);
 
   free(t);
+}
+
+void *team_reduce(team *t) {
+    if (!t || !t->reduce_fxn || t->num_workers == 0) return NULL;
+    void *acc = t->results[0] ? strdup((char*)t->results[0]) : NULL;
+    for (int i = 1; i < t->num_workers; i++) {
+        void *next_acc = t->reduce_fxn(acc, t->results[i]);
+        if (acc) free(acc); // free the old accumulator
+        acc = next_acc;
+    }
+    return acc;
 }
 
 team *create_and_assign_task(task_assignment *assignments, int nb_assignments) {

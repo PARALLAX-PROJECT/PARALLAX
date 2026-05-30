@@ -68,6 +68,7 @@ team * team_init(int num_threads);
 int team_start(team * team);
 int team_wait(team * team);
 void team_destroy(team * team);
+void *team_reduce(team *t);
 
 team *create_and_assign_task(task_assignment *assignments, int nb_assignments);
 

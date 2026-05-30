@@ -23,8 +23,11 @@ int main() {
   // Create the message queue for receiving NODES responses from controller
   create_mq("NODES", 0);
 
-  // Create sample dataset
-  char payload[] = "Hello from the master controller!";
+  // Create sample dataset (array of integers)
+  int payload[100];
+  for (int i = 0; i < 100; i++) {
+      payload[i] = i + 1; // Sum should be 5050
+  }
 
   int expected_node_count = 1; // Testing 1 node
 
@@ -37,7 +40,7 @@ int main() {
 
   // This will block waiting for a reply from the controller!
   // Make sure the controller is running and listening on 127.0.0.1:9000
-  execute_fxn(payload, strlen(payload) + 1, "my_test_function", expected_node_count);
+  execute_fxn(payload, sizeof(payload), "sum_array", expected_node_count);
 
   printf("\n[TestExec] execute_fxn completed successfully!\n");
 

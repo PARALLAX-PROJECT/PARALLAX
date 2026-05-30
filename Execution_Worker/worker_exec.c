@@ -79,7 +79,7 @@ void *execution_thread_func(void *arg) {
 
   strcpy(resp->data, task_mq);
   // reply the message wiht the queue message type
-  send_msg(context->master_ip, context->port, NULL, resp);
+  send_msg(context->master_ip, context->port, "worker_out", resp);
 
   free(resp);
 
@@ -142,7 +142,16 @@ void *execution_thread_func(void *arg) {
       char fd_str[16];
       snprintf(fd_str, sizeof(fd_str), "%d", pipefd[1]);
 
-      char *arg[] = {binary_path, task->function_name, (char *)task->data,
+      char data_filename[128];
+      snprintf(data_filename, sizeof(data_filename), "scratch/data_%d.bin", getpid());
+      FILE *dfp = fopen(data_filename, "wb");
+      if (dfp) {
+          size_t data_size = message->size - sizeof(recv_task_t);
+          fwrite(task->data, 1, data_size, dfp);
+          fclose(dfp);
+      }
+
+      char *arg[] = {binary_path, task->function_name, data_filename,
                      fd_str, NULL};
 
       execvp(binary_path, arg);
@@ -169,7 +178,7 @@ void *execution_thread_func(void *arg) {
     result_msg->size = strlen(ret_buf) + 1;
     strcpy(result_msg->data, ret_buf);
 
-    send_msg(message->sender_ip, message->sender_port, NULL, result_msg);
+    send_msg(message->sender_ip, message->sender_port, "worker_out", result_msg);
     free(result_msg);
   }
 }
@@ -236,7 +245,7 @@ void *worker_exec_thread(void *arg) {
       resp->size = strlen(found_mq) + 1;
       strcpy(resp->data, found_mq);
 
-      send_msg(message->sender_ip, message->sender_port, NULL, resp);
+      send_msg(message->sender_ip, message->sender_port, "worker_out", resp);
       free(resp);
       continue;
     }
