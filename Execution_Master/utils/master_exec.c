@@ -9,6 +9,15 @@
 #include"parallax_team.h"
 extern char controller_ip[16];
 
+void *sum_reduce(void *a, void *b) {
+    if (!a && !b) return NULL;
+    long long val_a = a ? atoll((char*)a) : 0;
+    long long val_b = b ? atoll((char*)b) : 0;
+    char *res = malloc(64);
+    sprintf(res, "%lld", val_a + val_b);
+    return res;
+}
+
 void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count){
     //first get worker xtics from controller
     // Allocate message with room for data payload
@@ -99,20 +108,32 @@ void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count
     team_start(t);
 
     team_wait(t);
-    //first join results
 
-    //logic to aggregate results
+    // Use the reduce function
+    t->reduce_fxn = sum_reduce;
+    void *final_result = team_reduce(t);
     
+    // Aggregate results from each thread
+    printf("\n=================================\n");
+    printf("AGGREGATED EXECUTION RESULTS\n");
+    printf("=================================\n");
+    
+    printf("---------------------------------\n");
+    printf("FINAL REDUCED RESULT: %s\n", final_result ? (char*)final_result : "(null)");
+    printf("=================================\n\n");
+
+    for (int i = 0; i < t->num_workers; i++) {
+        if (t->results[i]) {
+            printf("Node %d partial result: %s\n", i, (char *)t->results[i]);
+            free(t->results[i]); // Free the duplicated string
+            t->results[i] = NULL;
+        } else {
+            printf("Node %d partial result: (null)\n", i);
+        }
+    }
+    
+    if (final_result) free(final_result);
 
     team_destroy(t);
-
-
-    
-
-
-    
-
-    
-
 }
 

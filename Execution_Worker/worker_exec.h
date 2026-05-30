@@ -22,4 +22,6 @@ typedef struct {
 
 } execution_context;
 
+void *worker_exec_thread(void *arg);
+
 #endif
