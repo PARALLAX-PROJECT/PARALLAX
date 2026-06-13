@@ -46,9 +46,7 @@ static void register_node(MachineMetrics* msg) {
         node->role = msg->role;  // Store the role from the metrics
         printf("[StateReceiver] Nouveau nœud : uuid=%s ip=%s role=%d\n",
                node->uuid, node->ip, node->role);
-    }
-
-    // Snapshot initial sur disque (le pointeur de noeud est copié pour minimiser la zone critique)
+    }    // Snapshot initial sur disque (le pointeur de noeud est copié pour minimiser la zone critique)
     if (node) {
         NodeInfo snapshot = *node;
         pthread_mutex_unlock(&g_node_table.lock);
@@ -58,55 +56,66 @@ static void register_node(MachineMetrics* msg) {
     }
 }
 
-
-
-MachineMetrics * get_all_node_metrics(){
+MachineMetrics * get_all_active_workers(void) {
     pthread_mutex_lock(&g_node_table.lock);
-    int count = g_node_table.count;
-    if (count == 0) {
+    
+    // First count how many active workers we have
+    int active_workers_count = 0;
+    NodeInfo *curr = g_node_table.head;
+    while (curr != NULL) {
+        if (curr->role == 1 /* ROLE_WORKER */ && curr->status != NODE_EN_PANNE) {
+            active_workers_count++;
+        }
+        curr = curr->next;
+    }
+    
+    if (active_workers_count == 0) {
         pthread_mutex_unlock(&g_node_table.lock);
         return NULL;
     }
     
-    // Allocate count + 1 for sentinel
-    MachineMetrics *metrics = malloc((count + 1) * sizeof(MachineMetrics));
+    // Allocate active_workers_count + 1 for sentinel
+    MachineMetrics *metrics = malloc((active_workers_count + 1) * sizeof(MachineMetrics));
     if (!metrics) {
         pthread_mutex_unlock(&g_node_table.lock);
         return NULL;
     }
-    memset(metrics, 0, (count + 1) * sizeof(MachineMetrics)); // ensures sentinel's uuid is empty
-
-    NodeInfo *curr = g_node_table.head;
+    memset(metrics, 0, (active_workers_count + 1) * sizeof(MachineMetrics));
+    
+    curr = g_node_table.head;
     int i = 0;
-    while (curr != NULL && i < count) {
-        strncpy(metrics[i].uuid, curr->uuid, sizeof(metrics[i].uuid) - 1);
-        strncpy(metrics[i].ip, curr->ip, sizeof(metrics[i].ip) - 1);
-        metrics[i].port = curr->port;
-        
-        metrics[i].cpu_usage = curr->metrics.cpu_usage;
-        metrics[i].mem_usage = curr->metrics.ram_usage;
-        metrics[i].mem_used_mb = curr->metrics.ram_used_mb;
-        metrics[i].disk_usage = curr->metrics.disk_usage;
-        metrics[i].disk_used_mb = curr->metrics.disk_used_mb;
-        metrics[i].queue_len = curr->metrics.queue_len;
-        metrics[i].score = curr->metrics.score;
-        metrics[i].load_avg[0] = curr->metrics.load_avg[0];
-        metrics[i].load_avg[1] = curr->metrics.load_avg[1];
-        metrics[i].load_avg[2] = curr->metrics.load_avg[2];
-        
-        metrics[i].cpu_cores = curr->hardware.cpu_cores;
-        metrics[i].cpu_threads_per_core = curr->hardware.cpu_threads_per_core;
-        metrics[i].cpu_freq_mhz = curr->hardware.cpu_freq_mhz;
-        strncpy(metrics[i].cpu_model, curr->hardware.cpu_model, sizeof(metrics[i].cpu_model) - 1);
-        metrics[i].mem_total_mb = curr->hardware.ram_total_mb;
-        metrics[i].disk_total_mb = curr->hardware.disk_total_gb;
-        strncpy(metrics[i].disk_mount, curr->hardware.disk_mount, sizeof(metrics[i].disk_mount) - 1);
-        strncpy(metrics[i].network_iface, curr->hardware.network_iface, sizeof(metrics[i].network_iface) - 1);
-        
-        metrics[i].timestamp = curr->last_heartbeat;
-        
+    while (curr != NULL && i < active_workers_count) {
+        if (curr->role == 1 /* ROLE_WORKER */ && curr->status != NODE_EN_PANNE) {
+            strncpy(metrics[i].uuid, curr->uuid, sizeof(metrics[i].uuid) - 1);
+            strncpy(metrics[i].ip, curr->ip, sizeof(metrics[i].ip) - 1);
+            metrics[i].port = curr->port;
+            
+            metrics[i].cpu_usage = curr->metrics.cpu_usage;
+            metrics[i].mem_usage = curr->metrics.ram_usage;
+            metrics[i].mem_used_mb = curr->metrics.ram_used_mb;
+            metrics[i].disk_usage = curr->metrics.disk_usage;
+            metrics[i].disk_used_mb = curr->metrics.disk_used_mb;
+            metrics[i].queue_len = curr->metrics.queue_len;
+            metrics[i].score = curr->metrics.score;
+            metrics[i].load_avg[0] = curr->metrics.load_avg[0];
+            metrics[i].load_avg[1] = curr->metrics.load_avg[1];
+            metrics[i].load_avg[2] = curr->metrics.load_avg[2];
+            
+            metrics[i].cpu_cores = curr->hardware.cpu_cores;
+            metrics[i].cpu_threads_per_core = curr->hardware.cpu_threads_per_core;
+            metrics[i].cpu_freq_mhz = curr->hardware.cpu_freq_mhz;
+            strncpy(metrics[i].cpu_model, curr->hardware.cpu_model, sizeof(metrics[i].cpu_model) - 1);
+            metrics[i].mem_total_mb = curr->hardware.ram_total_mb;
+            metrics[i].disk_total_mb = curr->hardware.disk_total_gb;
+            strncpy(metrics[i].disk_mount, curr->hardware.disk_mount, sizeof(metrics[i].disk_mount) - 1);
+            strncpy(metrics[i].network_iface, curr->hardware.network_iface, sizeof(metrics[i].network_iface) - 1);
+            
+            metrics[i].timestamp = curr->last_heartbeat;
+            metrics[i].role = curr->role;
+            
+            i++;
+        }
         curr = curr->next;
-        i++;
     }
     
     pthread_mutex_unlock(&g_node_table.lock);
@@ -142,7 +151,7 @@ void * get_machine_xtics(void * arg){
         
         printf("[Controller] NODES query received from %s:%d\n", reply_ip, reply_port);
        
-        MachineMetrics * metrics = get_all_node_metrics();
+        MachineMetrics * metrics = get_all_active_workers();
         int count = 0;
         if (metrics) {
             while (strlen(metrics[count].uuid) > 0) {
