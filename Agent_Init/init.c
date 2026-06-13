@@ -294,11 +294,7 @@ static void start_threads(void) {
       pthread_create(&agent.threads.master_thread, NULL, master_thread_start,
                      NULL);
       agent.threads.master_thread_active = 1;
-<<<<<<< Updated upstream
-      printf("[THREAD] Master Execution thread started\n");
-=======
       printf("[THREAD] Master Thread started\n");
->>>>>>> Stashed changes
     }
     break;
 
