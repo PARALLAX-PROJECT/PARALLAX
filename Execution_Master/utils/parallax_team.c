@@ -95,7 +95,7 @@ int check_program_exists(char *ip, int port, const char *prog_name,
 
   map_entry *entry = find_by_msg_type(recv_q);
 
-  send_msg(ip, port, "master_out", msg);
+  send_msg(ip, port, "outgoing", msg);
   printf("[Master] Sent CHCK for '%s' to worker %s:%d\n", prog_name, ip, port);
   free(msg);
 
@@ -199,7 +199,7 @@ int send_prog_message_and_wait(char *ip, int port, char *task_mq_name) {
   msg->size = sizeof(prog.prog_name) + strlen(prog.prog_code) + 1;
   memcpy(msg->data, &prog, msg->size);
 
-  send_msg(ip, port, "master_out", msg);
+  send_msg(ip, port, "outgoing", msg);
   printf("[Master] Sent PROG message to worker %s:%d\n", ip, port);
   free(msg);
 
@@ -281,7 +281,7 @@ int send_task_message_and_wait(char *ip, int port, const char *task_mq_name,
   msg->size = task_size;
   memcpy(msg->data, task, task_size);
 
-  send_msg(ip, port, "master_out", msg);
+  send_msg(ip, port, "outgoing", msg);
   printf("[Master] Sent task (function=%s) to queue %s\n", function_name,
          task_mq_name);
 

@@ -39,7 +39,7 @@ void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count
     printf("[MasterExec] Sending NODES query with reply address %s:%d\n", 
            message->sender_ip, message->sender_port);
     
-    send_msg(controller_ip, 9000, "master_out", message);
+    send_msg(controller_ip, 9000, "outgoing", message);
     printf("[MasterExec] NODES query sent to %s:9000\n", controller_ip);
     free(message);
 
