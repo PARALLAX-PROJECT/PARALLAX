@@ -59,6 +59,11 @@ void * prog_listener_func(void * args){
 } 
 
 
+void * prog_from_interface_listener(void * args){
+    //
+}
+
+
 void * master_thread_start(void *args){
     //first create a mq for recieving programs
     
@@ -72,7 +77,7 @@ void * master_thread_start(void *args){
 
     while(1){
         //read something from mq
-        ssize_t size=msgrcv( prog_mq->queue_id ,&msgp, sizeof(msgp), 1L, 0);
+        ssize_t size=msgrcv( prog_mq->queue_id ,&msgp, sizeof(queued_message) - sizeof(long), 1L, 0);
         if(size<0){
             continue;
         }

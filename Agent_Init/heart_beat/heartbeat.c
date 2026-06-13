@@ -2,6 +2,9 @@
 #include "heartbeat.h"
 #include "../init.h"
 #include "../network/network_agent.h"
+#include<string.h>
+#include<stdlib.h>
+#include <unistd.h>
 
 // ══════════════════════════════════════════════════════════════════════════
 //  LIGHTWEIGHT HEARTBEAT THREAD (Sends every 2 seconds with role only)

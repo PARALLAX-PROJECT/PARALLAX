@@ -1,4 +1,5 @@
 #include "init.h"
+#include "net_utils.h"
 
 #include "../Execution_Worker/worker_exec.h"
 #include "master_thread.h"
@@ -56,93 +57,7 @@ static void generate_uuid(char *uuid) {
       bytes[14], bytes[15]);
 }
 
-void load_network_interface(char *iface, size_t max_len) {
-  FILE *f = fopen(CONF_FILE, "r");
-  if (!f) {
-    perror("[CONFIG] fopen");
-    strncpy(iface, "eth0", max_len - 1);
-    iface[max_len - 1] = '\0';
-    return;
-  }
 
-  char line[128];
-
-  while (fgets(line, sizeof(line), f)) {
-    if (strncmp(line, "interface=", 10) == 0) {
-      strncpy(iface, line + 10, max_len - 1);
-      iface[max_len - 1] = '\0';
-
-      // remove newline
-      iface[strcspn(iface, "\n")] = '\0';
-
-      fclose(f);
-
-      // 🔒 validation
-      for (int i = 0; iface[i]; i++) {
-        char c = iface[i];
-        if (!(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') &&
-            !(c >= '0' && c <= '9') && c != '_' && c != '-') {
-
-          printf("[CONFIG] Invalid interface, fallback to eth0\n");
-          strncpy(iface, "eth0", max_len - 1);
-          iface[max_len - 1] = '\0';
-          break;
-        }
-      }
-
-      printf("[CONFIG] Interface loaded: %s\n", iface);
-      return;
-    }
-  }
-
-  fclose(f);
-
-  // fallback if not found
-  printf("[CONFIG] interface not found, fallback to eth0\n");
-  strncpy(iface, "eth0", max_len - 1);
-  iface[max_len - 1] = '\0';
-}
-
-void get_local_ip(char *ip, size_t max_len, const char *iface_name) {
-  char command[128];
-  snprintf(command, sizeof(command), "ip addr show %s", iface_name);
-
-  FILE *fp = popen(command, "r");
-  if (!fp) {
-    strncpy(ip, "0.0.0.0", max_len - 1);
-    ip[max_len - 1] = '\0';
-    return;
-  }
-
-  char line[512];
-
-  while (fgets(line, sizeof(line), fp)) {
-    // Cherche "inet "
-    char *inet_pos = strstr(line, "inet ");
-    if (inet_pos) {
-      inet_pos += 5; // avancer après "inet "
-
-      // Copier jusqu'au '/'
-      char *slash = strchr(inet_pos, '/');
-      if (slash) {
-        size_t len = slash - inet_pos;
-        if (len < max_len) {
-          strncpy(ip, inet_pos, len);
-          ip[len] = '\0';
-        }
-        break;
-      }
-    }
-  }
-
-  pclose(fp);
-
-  // fallback si rien trouvé
-  if (strlen(ip) == 0) {
-    strncpy(ip, "0.0.0.0", max_len - 1);
-    ip[max_len - 1] = '\0';
-  }
-}
 
 static void load_or_create_uuid(void) {
   FILE *f = fopen(UUID_FILE, "r");
@@ -374,8 +289,17 @@ static void start_threads(void) {
     }
     break;
 
+  case ROLE_MASTER:
+    if (!agent.threads.master_thread_active) {
+      pthread_create(&agent.threads.master_thread, NULL, master_thread_start,
+                     NULL);
+      agent.threads.master_thread_active = 1;
+      printf("[THREAD] Master Execution thread started\n");
+    }
+    break;
+
   default:
-    printf("[THREAD] No role-specific threads to start for ROLE_UNKNOWN\n");
+    printf("[THREAD] No role-specific threads to start for role %d\n", agent.role);
     break;
   }
 }
@@ -398,8 +322,16 @@ static void stop_threads(void) {
       printf("[THREAD] State Receiver thread stopped\n");
     }
     break;
+  case ROLE_MASTER:
+    if (agent.threads.master_thread_active) {
+      pthread_cancel(agent.threads.master_thread);
+      pthread_join(agent.threads.master_thread, NULL);
+      agent.threads.master_thread_active = 0;
+      printf("[THREAD] Master Execution thread stopped\n");
+    }
+    break;
   default:
-    printf("[THREAD] No role-specific threads to stop for ROLE_UNKNOWN\n");
+    printf("[THREAD] No role-specific threads to stop for role %d\n", agent.role);
     break;
   }
 
