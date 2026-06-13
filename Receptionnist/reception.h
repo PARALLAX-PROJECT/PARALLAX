@@ -8,7 +8,7 @@
 //  RECEPTIONIST CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-#define RECEPTIONIST_LISTENING_PORT 9002      // Port receptionist listens on for submissions
+#define RECEPTIONIST_LISTENING_PORT 9010      // Port receptionist listens on for submissions
 #define RECEPTIONIST_QUERY_INTERVAL 5         // Query master IP every 5 seconds
 #define REQUEST_MASTER_IP_TIMEOUT 10          // Timeout waiting for master IP from controller
 
@@ -67,8 +67,8 @@ typedef struct {
     char controller_ip[16];       // Controller IP (must be discovered)
     char master_ip[16];           // Current master IP (updated by controller)
     int master_port;              // Current master port
-    pthread_mutex_t master_lock;  // Lock for master_ip/master_port updates
-    volatile int master_ip_valid; // 1 = has valid master IP, 0 = waiting for first response
+    
+    
 } ReceptionistState;
 
 // ═══════════════════════════════════════════════════════════════════════════

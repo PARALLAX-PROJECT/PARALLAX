@@ -289,8 +289,17 @@ static void start_threads(void) {
     }
     break;
 
+  case ROLE_MASTER:
+    if (!agent.threads.master_thread_active) {
+      pthread_create(&agent.threads.master_thread, NULL, master_thread_start,
+                     NULL);
+      agent.threads.master_thread_active = 1;
+      printf("[THREAD] Master Execution thread started\n");
+    }
+    break;
+
   default:
-    printf("[THREAD] No role-specific threads to start for ROLE_UNKNOWN\n");
+    printf("[THREAD] No role-specific threads to start for role %d\n", agent.role);
     break;
   }
 }
@@ -313,8 +322,16 @@ static void stop_threads(void) {
       printf("[THREAD] State Receiver thread stopped\n");
     }
     break;
+  case ROLE_MASTER:
+    if (agent.threads.master_thread_active) {
+      pthread_cancel(agent.threads.master_thread);
+      pthread_join(agent.threads.master_thread, NULL);
+      agent.threads.master_thread_active = 0;
+      printf("[THREAD] Master Execution thread stopped\n");
+    }
+    break;
   default:
-    printf("[THREAD] No role-specific threads to stop for ROLE_UNKNOWN\n");
+    printf("[THREAD] No role-specific threads to stop for role %d\n", agent.role);
     break;
   }
 

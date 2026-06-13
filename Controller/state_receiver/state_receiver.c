@@ -14,6 +14,8 @@
 #include "ms_queue.h"
 #include "network_agent.h"
 #include "../../Agent_Init/init.h"
+#include "../../Receptionnist/reception.h"
+
 
 
 
@@ -499,6 +501,62 @@ void * hello_func(void * arg){
     return NULL;
 }
 
+void * request_master_ip_func(void * arg) {
+    map_entry * request_master_ip_entry = (map_entry *)arg;
+    queued_message qmsg;
+    
+    while (1) {
+        ssize_t ret = msgrcv(request_master_ip_entry->queue_id, &qmsg, sizeof(qmsg) - sizeof(long),
+                             1L, IPC_NOWAIT); // NETWORK_AGENT_MTYPE is 1L
+        if (ret == -1) {
+            usleep(100000);   // 100ms
+            continue;
+        }
+
+        MasterIPRequest *req = (MasterIPRequest *)qmsg.data;
+        
+        char master_ip[16] = "";
+        char master_uuid[37] = "";
+        int master_port = 0;
+        
+        pthread_mutex_lock(&g_node_table.lock);
+        for (NodeInfo* node = g_node_table.head; node; node = node->next) {
+            if (node->role == ROLE_MASTER && node->status != NODE_EN_PANNE) {
+                strncpy(master_ip, node->ip, sizeof(master_ip) - 1);
+                strncpy(master_uuid, node->uuid, sizeof(master_uuid) - 1);
+                master_port = node->port;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_node_table.lock);
+        
+        MasterIPResponse resp;
+        memset(&resp, 0, sizeof(MasterIPResponse));
+        if (master_port != 0) {
+            strncpy(resp.master_uuid, master_uuid, sizeof(resp.master_uuid) - 1);
+            strncpy(resp.master_ip, master_ip, sizeof(resp.master_ip) - 1);
+            resp.master_port = master_port;
+        } else {
+            strncpy(resp.master_uuid, "NONE", sizeof(resp.master_uuid) - 1);
+            strncpy(resp.master_ip, "NONE", sizeof(resp.master_ip) - 1);
+            resp.master_port = 0;
+        }
+        
+        message_t *reply = malloc(sizeof(message_t) + sizeof(MasterIPResponse));
+        if (reply) {
+            memset(reply, 0, sizeof(message_t) + sizeof(MasterIPResponse));
+            strcpy(reply->type, PROVIDE_MASTER_IP_TYPE);
+            strcpy(reply->recv_type, "");
+            reply->size = sizeof(MasterIPResponse);
+            memcpy(reply->data, &resp, sizeof(MasterIPResponse));
+            
+            send_msg(req->receptionist_ip, req->receptionist_port, "outgoing", reply);
+            free(reply);
+        }
+    }
+    return NULL;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  HEARTBEAT MONITOR THREAD - Detects stale/failed nodes
 // ════════════════════════════════════════════════════════════════════════════
@@ -583,6 +641,7 @@ void* state_receiver_thread_run(void* arg) {
     char * mq_statecapture_str = create_mq(STATECAPTURE_TYPE, sizeof(queued_message));    
     char * mq_hello_str = create_mq(HELLO_TYPE, sizeof(queued_message));
     char * mq_heartbeat_str = create_mq(HB_TYPE, sizeof(queued_message));
+    char * mq_request_master_ip_str = create_mq(REQUEST_MASTER_IP_TYPE, sizeof(queued_message));
 
     if (mq_statecapture_init_str == NULL) {
         perror("[StateReceiver] create_mq()");
@@ -593,6 +652,7 @@ void* state_receiver_thread_run(void* arg) {
     map_entry * statecapture_entry = find_by_msg_type(mq_statecapture_str);
     map_entry * hello_entry = find_by_msg_type(mq_hello_str);
     map_entry * heartbeat_entry = find_by_msg_type(mq_heartbeat_str);
+    map_entry * request_master_ip_entry = find_by_msg_type(mq_request_master_ip_str);
     
     if (!statecapture_init_entry) {
         fprintf(stderr, "[StateReceiver] STATECAPTURE_INIT queue not created \n");
@@ -613,6 +673,11 @@ void* state_receiver_thread_run(void* arg) {
         fprintf(stderr, "[StateReceiver] HEARTBEAT queue not created \n");
         return NULL;
     }
+
+    if (!request_master_ip_entry) {
+        fprintf(stderr, "[StateReceiver] REQUEST_MASTER_IP queue not created \n");
+        return NULL;
+    }
     
     pthread_t statecapture_init_thread;
     pthread_t statecapture_thread;
@@ -620,12 +685,14 @@ void* state_receiver_thread_run(void* arg) {
     pthread_t get_xtics_thread;
     pthread_t heartbeat_thread;
     pthread_t heartbeat_monitor_thread;
+    pthread_t request_master_ip_thread;
     
     pthread_create(&statecapture_init_thread, NULL, statecapture_init_func, (void *)statecapture_init_entry);
     pthread_create(&statecapture_thread, NULL, statecapture_func, (void *)statecapture_entry);
     pthread_create(&hello_thread, NULL, hello_func, (void *)hello_entry);
     pthread_create(&get_xtics_thread, NULL, get_machine_xtics, NULL);
     pthread_create(&heartbeat_thread, NULL, heartbeat_receiver_func, (void *)heartbeat_entry);
+    pthread_create(&request_master_ip_thread, NULL, request_master_ip_func, (void *)request_master_ip_entry);
     
     // Start heartbeat monitor thread
     atomic_store(&heartbeat_monitor_running, 1);
