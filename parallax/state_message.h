@@ -75,6 +75,7 @@ typedef struct{
 typedef struct{
     char uuid[37];     // 36 chars + null terminator
     int type;          // MSG_HEARTBEAT
+    int role;          // Node role (e.g. ROLE_WORKER, ROLE_MASTER)
 }MachineHeartbeat;
 
 #endif // STATE_MESSAGE_H

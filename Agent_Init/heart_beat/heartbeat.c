@@ -17,6 +17,7 @@ static volatile int heartbeat_running = 0;
 void *heartbeat_thread_run(void *arg){
     (void)arg; // avoids warning "Unused parameter"
     
+    extern int agent_role;
     heartbeat_running = 1;
     printf("[HEARTBEAT] Thread started\n");
 
@@ -26,6 +27,7 @@ void *heartbeat_thread_run(void *arg){
         
         // Fill heartbeat with minimal data
         hb.type = MSG_HEARTBEAT;
+        hb.role = agent_role;
         strncpy(hb.uuid, get_agent_uuid(), sizeof(hb.uuid) - 1);
         
         // Send lightweight heartbeat

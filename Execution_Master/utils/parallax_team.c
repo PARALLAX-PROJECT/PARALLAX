@@ -78,7 +78,7 @@ int check_program_exists(char *ip, int port, const char *prog_name,
   char iface[64] = {0};
   load_network_interface(iface, sizeof(iface));
   get_local_ip(msg->sender_ip, sizeof(msg->sender_ip), iface);
-  msg->sender_port = 9005;
+  msg->sender_port = 9000;
   strcpy(msg->type, "CHCK");
 
   /* Create a one-shot reply queue and embed its name in the message */
@@ -151,7 +151,7 @@ int send_prog_message_and_wait(char *ip, int port, char *task_mq_name, prog_t * 
   char iface[64] = {0};
   load_network_interface(iface, sizeof(iface));
   get_local_ip(msg->sender_ip, sizeof(msg->sender_ip), iface);
-  msg->sender_port = 9005;
+  msg->sender_port = 9000;
   strcpy(msg->type, "PROG");
 
   /* One-shot reply queue for the worker's PROG acknowledgement */
@@ -233,7 +233,7 @@ int send_task_message_and_wait(char *ip, int port, const char *task_mq_name,
   char iface[64] = {0};
   load_network_interface(iface, sizeof(iface));
   get_local_ip(msg->sender_ip, sizeof(msg->sender_ip), iface);
-  msg->sender_port = 9005;
+  msg->sender_port = 9000;
   strcpy(msg->type, task_mq_name);
 
   /* One-shot reply queue for the task execution result */

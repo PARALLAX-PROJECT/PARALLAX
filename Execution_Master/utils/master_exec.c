@@ -12,7 +12,7 @@
 
 
 
-__attribute__((weak)) char controller_ip[16] = "127.0.0.1";
+__attribute__((weak)) char controller_ip[16] = "192.168.1.199";
 
 void *sum_reduce(void *a, void *b) {
     if (!a && !b) return NULL;
@@ -36,7 +36,7 @@ void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count
     char iface[64] = {0};
     load_network_interface(iface, sizeof(iface));
     get_local_ip(message->sender_ip, sizeof(message->sender_ip), iface);
-    message->sender_port = 9005;  // test agent listens on 9005 — controller replies here
+    message->sender_port = 9000;  // test agent listens on 9005 — controller replies here
     message->size = 0;
     
     printf("[MasterExec] Sending NODES query with reply address %s:%d\n", 

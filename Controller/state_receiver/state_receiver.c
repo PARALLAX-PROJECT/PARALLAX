@@ -34,14 +34,24 @@ static void register_node(MachineMetrics* msg) {
     if (!msg || strlen(msg->uuid) == 0) return;
     pthread_mutex_lock(&g_node_table.lock);
 
-    if (node_table_find(&g_node_table, msg->uuid)) {
-        printf("[StateReceiver] Nœud %s déjà enregistré, HELLO ignoré\n",
+    NodeInfo* node = node_table_find(&g_node_table, msg->uuid);
+    if (node) {
+        printf("[StateReceiver] Nœud %s déjà enregistré. Mise à jour des coordonnées et activation.\n",
                msg->uuid);
+        strncpy(node->ip, msg->ip, sizeof(node->ip) - 1);
+        node->ip[sizeof(node->ip) - 1] = '\0';
+        node->port = msg->port;
+        node->role = msg->role;
+        node->status = NODE_ACTIF;
+        node->last_heartbeat = time(NULL);
+        
+        NodeInfo snapshot = *node;
         pthread_mutex_unlock(&g_node_table.lock);
+        persist_node_snapshot(&snapshot);
         return;
     }
 
-    NodeInfo* node = node_table_add(&g_node_table, msg->uuid, msg->ip, msg->port);
+    node = node_table_add(&g_node_table, msg->uuid, msg->ip, msg->port);
     if (node) {
         node->role = msg->role;  // Store the role from the metrics
         printf("[StateReceiver] Nouveau nœud : uuid=%s ip=%s role=%d\n",
@@ -253,24 +263,41 @@ void print_machine_metrics(const MachineMetrics *m)
  * Met à jour le heartbeat d'un nœud lors de la réception d'un MSG_HEARTBEAT.
  * Met simplement à jour le timestamp et vérifie la disponibilité.
  */
-static void update_heartbeat(MachineHeartbeat* hb) {
+static void update_heartbeat(MachineHeartbeat* hb, const char* sender_ip, int sender_port) {
     if (!hb || strlen(hb->uuid) == 0) return;
     pthread_mutex_lock(&g_node_table.lock);
 
+    int newly_registered = 0;
     NodeInfo* node = node_table_find(&g_node_table, hb->uuid);
     if (!node) {
-        // Node not yet registered (heartbeat received before HELLO), skip it
-        printf("[HEARTBEAT] ⚠ Heartbeat from unknown node %s, waiting for HELLO registration\n", hb->uuid);
-        pthread_mutex_unlock(&g_node_table.lock);
-        return;
+        printf("[HEARTBEAT] ⚠ Heartbeat from unknown node %s, auto-registering...\n", hb->uuid);
+        node = node_table_add(&g_node_table, hb->uuid, sender_ip, sender_port);
+        if (!node) {
+            pthread_mutex_unlock(&g_node_table.lock);
+            return;
+        }
+        node->role = hb->role;
+        newly_registered = 1;
     }
     
-    // Update only the heartbeat timestamp (status monitoring handled by heartbeat_monitor_thread)
+    // Update identity, role, and status
+    strncpy(node->ip, sender_ip, sizeof(node->ip) - 1);
+    node->ip[sizeof(node->ip) - 1] = '\0';
+    node->port = sender_port;
+    node->role = hb->role;
+    node->status = NODE_ACTIF;
     node->last_heartbeat = time(NULL);
-    printf("[HEARTBEAT] Heartbeat from %s - last_heartbeat updated (status: %d)\n", 
-           hb->uuid, node->status);
+    
+    printf("[HEARTBEAT] Heartbeat from %s - last_heartbeat updated (status: %d, ip: %s, port: %d)\n", 
+           hb->uuid, node->status, node->ip, node->port);
 
-    pthread_mutex_unlock(&g_node_table.lock);
+    if (newly_registered) {
+        NodeInfo snapshot = *node;
+        pthread_mutex_unlock(&g_node_table.lock);
+        persist_node_snapshot(&snapshot);
+    } else {
+        pthread_mutex_unlock(&g_node_table.lock);
+    }
 }
 
 /**
@@ -281,7 +308,7 @@ static void update_metrics(MachineMetrics* msg) {
     pthread_mutex_lock(&g_node_table.lock);
 
     printf("\n\n\nFrom update Metrics");
-     print_machine_metrics(msg);
+    //print_machine_metrics(msg);
    //printf("[StateReceiver] Received a Heartbeat\n");
     NodeInfo* node = node_table_find(&g_node_table, msg->uuid);
     if (!node) {
@@ -441,7 +468,7 @@ void * heartbeat_receiver_func(void * arg){
 
             // Le payload du network_agent est dans qmsg.data
             MachineHeartbeat *hb = (MachineHeartbeat *)qmsg.data;
-            update_heartbeat(hb);
+            update_heartbeat(hb, qmsg.sender_ip, qmsg.sender_port);
             printf("[HEARTBEAT] Received heartbeat from %s\n", hb->uuid);
         }
         

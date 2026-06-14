@@ -22,6 +22,10 @@
 void receptionist_handle_master_ip_update(MasterIPResponse* response);
 static ReceptionistState g_receptionist;
 
+#ifndef ROLE_RECEPTIONIST
+#define ROLE_RECEPTIONIST 4
+#endif
+
 static char pending_code[7500] = {0};
 static int pending_code_len = 0;
 static int has_pending_code = 0;
@@ -254,7 +258,69 @@ void receptionist_handle_master_ip_update(MasterIPResponse* response) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static int discover_controller(void) {
-    strcpy(g_receptionist.controller_ip, "127.0.0.1");
+    MachineMetrics msg;
+    memset(&msg, 0, sizeof(MachineMetrics));
+
+    // Ensure UUID is set
+    strncpy(msg.uuid, get_agent_uuid(), sizeof(msg.uuid) - 1);
+    msg.type = MSG_HELLO;
+    msg.timestamp = time(NULL);
+    msg.role = ROLE_RECEPTIONIST;
+
+    // Set IP and port dynamically
+    load_network_interface(msg.network_iface, sizeof(msg.network_iface));
+    get_local_ip(msg.ip, sizeof(msg.ip), msg.network_iface);
+    msg.port = 9008; // Receptionist listening port
+
+    printf("[RECEPTIONIST] Waiting for controller's IP reply on port 9009 via message queue...\n");
+    map_entry *mq = find_by_msg_type(HELLO_TYPE);
+    if (!mq) {
+        if (create_mq(HELLO_TYPE, NETWORK_AGENT_MAX_DATA) != NULL) {
+            mq = find_by_msg_type(HELLO_TYPE);
+        }
+    }
+
+    if (!mq) {
+        printf("[RECEPTIONIST] Failed to find or create HELLO_TYPE queue!\n");
+        return 0;
+    }
+
+    int response_received = 0;
+    queued_message item;
+
+    while (!response_received) {
+        message_t *pkt =
+            (message_t *)malloc(sizeof(message_t) + sizeof(MachineMetrics));
+        if (pkt) {
+            strcpy(pkt->type, HELLO_TYPE);
+            pkt->size = sizeof(MachineMetrics);
+            memcpy(pkt->data, &msg, sizeof(MachineMetrics));
+
+            // Broadcast on port 9001, since that's what controller listens to for HELLO broadcast
+            send_broadcast(9001, pkt);
+            free(pkt);
+            printf("[RECEPTIONIST] HELLO sent: uuid=%s\n", msg.uuid);
+        }
+
+        // Wait up to 5 seconds for a reply
+        for (int i = 0; i < 50; i++) {
+            ssize_t received =
+                msgrcv(mq->queue_id, &item, sizeof(item) - sizeof(long),
+                       NETWORK_AGENT_MTYPE, IPC_NOWAIT);
+            if (received > 0) {
+                if (strncmp(item.data, "IP:", 3) == 0) {
+                    printf("\n--- [RECEPTIONIST] Controller IP Received ---\n");
+                    printf("Message Type: %s\n", item.type);
+                    printf("Controller IP: %s\n", item.data + 3);
+                    strncpy(g_receptionist.controller_ip, item.data + 3, 15);
+                    g_receptionist.controller_ip[15] = '\0';
+                    response_received = 1;
+                    break;
+                }
+            }
+            usleep(100000); // 100ms
+        }
+    }
     return 1;
 }
 

@@ -71,8 +71,11 @@ char *create_mq(char *msg_type, int msg_len) {
   }
 
   /* Generate a random name when the caller passes NULL */
-  char *random_msg_type = (char *)malloc(8);
+  char *random_msg_type = NULL;
   if (msg_type == NULL) {
+    random_msg_type = (char *)malloc(8);
+    if (!random_msg_type)
+      return NULL;
     const char charset[] =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (int i = 0; i < 7; i++) {
@@ -85,18 +88,31 @@ char *create_mq(char *msg_type, int msg_len) {
 
   registry->counter++;
 
-  /* Create the kernel-level queue with IPC_PRIVATE for process isolation */
-  int msgid = msgget(IPC_PRIVATE, IPC_CREAT | 0666);
+  /* Create the kernel-level queue using a stable key hashed from msg_type */
+  key_t key = IPC_PRIVATE;
+  if (msg_type != NULL) {
+    unsigned long hash = 5381;
+    int c;
+    char *temp = msg_type;
+    while ((c = (unsigned char)*temp++)) {
+      hash = ((hash << 5) + hash) + c;
+    }
+    key = (key_t)(hash & 0x7FFFFFFF);
+  }
+
+  int msgid = msgget(key, IPC_CREAT | 0666);
   if (msgid < 0) {
     perror("create_mq: msgget");
-    free(random_msg_type);
+    if (random_msg_type)
+      free(random_msg_type);
     return NULL;
   }
 
   /* Build and insert a new registry entry */
   map_entry *entry = (map_entry *)malloc(sizeof(map_entry));
   if (!entry) {
-    free(random_msg_type);
+    if (random_msg_type)
+      free(random_msg_type);
     return NULL;
   }
 
@@ -114,6 +130,10 @@ char *create_mq(char *msg_type, int msg_len) {
   } else {
     node *new_node = create_node(entry);
     push_back(registry->head, new_node);
+  }
+
+  if (random_msg_type) {
+    free(random_msg_type);
   }
 
   return entry->msg_type;

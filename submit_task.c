@@ -1,10 +1,7 @@
 #include "ms_queue.h"
-#include "network_agent.h"
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 // Defined in master_exec.c
 extern void execute_fxn(void *data, size_t total_size, char *fxn_name,
@@ -14,27 +11,25 @@ extern void execute_fxn(void *data, size_t total_size, char *fxn_name,
 char controller_ip[16] = "192.168.1.199";
 
 int main() {
-  printf("[TestExec] Starting network agent on port 9005...\n");
-  static network_agent_config cfg = {9005, "master_out"};
-  pthread_t net_thread;
-  pthread_create(&net_thread, NULL, network_thread_run, &cfg);
-  usleep(500000); // give it time to start
+  printf("[SubmittedProg] Starting execution of map-reduce task...\n");
 
   // Create the message queue for receiving NODES responses from controller
   create_mq("NODES_TEST", 0);
   map_entry *node_mq = find_by_msg_type("NODES_TEST");
-  printf("NODES mq created with id %d\n", node_mq->queue_id);
+  if (!node_mq) {
+    fprintf(stderr, "[SubmittedProg] Error: Failed to create NODES_TEST queue\n");
+    return 1;
+  }
+  printf("[SubmittedProg] NODES_TEST mq resolved with ID %d\n", node_mq->queue_id);
+
   // Create sample dataset (array of integers)
   int payload[100];
   for (int i = 0; i < 100; i++) {
     payload[i] = i + 1; // Sum should be 5050
   }
 
-  int expected_node_count = 2; // Testing 1 node
+  int expected_node_count = 2; // Testing with 2 nodes expected
 
-  
-  // This will block waiting for a reply from the controller!
-  // Make sure the controller is running and listening on 127.0.0.1:9000
   char *worker_code = "#include <stdio.h>\n"
                       "#include <stdlib.h>\n"
                       "#include <string.h>\n"
@@ -80,7 +75,6 @@ int main() {
   execute_fxn(payload, sizeof(payload), "sum_array", expected_node_count,
               worker_code, "test_prog4");
 
-  printf("\n[TestExec] execute_fxn completed successfully!\n");
-
+  printf("[SubmittedProg] execute_fxn completed successfully!\n");
   return 0;
 }

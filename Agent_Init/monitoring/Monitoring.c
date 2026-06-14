@@ -166,7 +166,7 @@ void *monitoring_thread_run(void *arg){
             m.type = MSG_STATECAPTURE;
             
             // DEBUG: Afficher les données avant envoi
-            debug_print_sent_metrics(&m, "MSG_STATECAPTURE");
+           // debug_print_sent_metrics(&m, "MSG_STATECAPTURE");
             
             message_t *pkt = (message_t *)malloc(sizeof(message_t) + sizeof(MachineMetrics));
             if (pkt) {

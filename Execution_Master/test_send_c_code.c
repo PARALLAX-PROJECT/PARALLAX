@@ -117,3 +117,5 @@ int main() {
     printf("[TestClient] Message sent. Exiting client.\n");
     return 0;
 }
+// Global for master_exec.c to connect to Controller
+char controller_ip[16] = "192.168.1.199";
