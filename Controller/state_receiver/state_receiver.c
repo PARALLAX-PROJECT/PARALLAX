@@ -280,13 +280,12 @@ static void update_heartbeat(MachineHeartbeat* hb, const char* sender_ip, int se
         newly_registered = 1;
     }
     
-    // Update identity, role, and status
-    strncpy(node->ip, sender_ip, sizeof(node->ip) - 1);
-    node->ip[sizeof(node->ip) - 1] = '\0';
-    node->port = sender_port;
-    node->role = hb->role;
+    // Update only status, role, and heartbeat timestamp (do not overwrite IP/port for already registered nodes)
     node->status = NODE_ACTIF;
     node->last_heartbeat = time(NULL);
+    if (hb->role != ROLE_UNKNOWN) {
+        node->role = hb->role;
+    }
     
     printf("[HEARTBEAT] Heartbeat from %s - last_heartbeat updated (status: %d, ip: %s, port: %d)\n", 
            hb->uuid, node->status, node->ip, node->port);
