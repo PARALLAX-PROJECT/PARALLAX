@@ -530,8 +530,8 @@ void * hello_func(void * arg){
         reply->size = strlen(reply->data) + 1;
         
         printf("Replying to HELLO with controller IP: %s sent to agent at %s:%d\n", my_ip, msg->ip, msg->port);
-        // Reply directly via reliable TCP unicast to the agent instead of a broadcast
-        send_broadcast_message(9001, reply);
+        // Reply directly to the agent's UDP port (msg->port + 1)
+        send_broadcast_message(msg->port + 1, reply);
         free(reply);
     }
     return NULL;
