@@ -64,6 +64,7 @@ void *prog_listener_func(void *args) {
   char prefix[64] = "";
   char network_prefix[64] = "";
   char parallax_prefix[64] = "";
+  char root_prefix[64] = "";
 
   // Check if we are running from root workspace or Execution_Master
   if (access("Execution_Master/utils/master_exec.c", F_OK) == 0) {
@@ -71,11 +72,13 @@ void *prog_listener_func(void *args) {
     strcpy(prefix, "Execution_Master/utils/");
     strcpy(network_prefix, "Agent_Init/network/");
     strcpy(parallax_prefix, "parallax/");
+    strcpy(root_prefix, ".");
   } else {
     // We are at Execution_Master subdirectory
     strcpy(prefix, "utils/");
     strcpy(network_prefix, "../Agent_Init/network/");
     strcpy(parallax_prefix, "../parallax/");
+    strcpy(root_prefix, "..");
   }
 
   snprintf(compile_cmd, sizeof(compile_cmd),
@@ -92,11 +95,12 @@ void *prog_listener_func(void *args) {
            "-I%s "
            "-I%s "
            "-I%s "
+           "-I%s "
            "-pthread "
            "-o %s/bin_%s",
            filepath, ip_filepath, prefix, prefix, prefix, prefix, prefix, network_prefix,
            network_prefix, network_prefix, network_prefix, prefix,
-           network_prefix, parallax_prefix, PROG_DIR, prog->program_name);
+           network_prefix, parallax_prefix, root_prefix, PROG_DIR, prog->program_name);
 
   printf("[Master] Compiling program: %s\n", compile_cmd);
   if (system(compile_cmd) == 0) {

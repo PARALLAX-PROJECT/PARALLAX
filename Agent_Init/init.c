@@ -236,28 +236,39 @@ static AgentRole read_role(void) {
     return ROLE_UNKNOWN;
   }
 
-  char role_str[32];
-  fscanf(f, "role=%31s", role_str);
+  char role_str[64] = {0};
+  char line[128];
+  while (fgets(line, sizeof(line), f)) {
+    char *p = strstr(line, "role=");
+    if (p) {
+      p += 5; // skip "role="
+      int i = 0;
+      while (p[i] && p[i] != '\n' && p[i] != '\r' && p[i] != ' ' && i < 63) {
+        role_str[i] = p[i];
+        i++;
+      }
+      role_str[i] = '\0';
+      break;
+    }
+  }
   fclose(f);
 
-    if (strcmp(role_str, "Worker") == 0){ 
-        agent_role = ROLE_WORKER;
-        return ROLE_WORKER;
-    }
-    if (strcmp(role_str, "Controller") == 0) {
-        agent_role = ROLE_CONTROLLER;
-        return ROLE_CONTROLLER;
-    }
-    if (strcmp(role_str, "Master") == 0) {
-        agent_role = ROLE_MASTER;
-        return ROLE_MASTER;
-    }
+  if (strcmp(role_str, "Worker") == 0) { 
+      agent_role = ROLE_WORKER;
+      return ROLE_WORKER;
+  }
+  if (strcmp(role_str, "Controller") == 0) {
+      agent_role = ROLE_CONTROLLER;
+      return ROLE_CONTROLLER;
+  }
+  if (strcmp(role_str, "Master") == 0) {
+      agent_role = ROLE_MASTER;
+      return ROLE_MASTER;
+  }
 
-    printf("[INIT] Unknown role '%s', defaulting to ROLE_UNKNOWN\n", role_str);
-    {
-        agent_role = ROLE_UNKNOWN;
-        return ROLE_UNKNOWN;
-    }
+  printf("[INIT] Unknown role '%s', defaulting to ROLE_UNKNOWN\n", role_str);
+  agent_role = ROLE_UNKNOWN;
+  return ROLE_UNKNOWN;
 }
 
 static void start_threads(void) {
