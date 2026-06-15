@@ -32,13 +32,22 @@ void execute_fxn(ParallaxParam *params, int param_count, char *fxn_name,
 
   int node_count = ctx ? ctx->expected_node_count : 1;
 
+  // Dynamically create a unique queue to receive the NODES response
+  char *temp_mq = create_mq(NULL, 0);
+  char nodes_mq_name[64];
+  if (temp_mq) {
+    strcpy(nodes_mq_name, temp_mq);
+  } else {
+    strcpy(nodes_mq_name, "NODES_TEST");
+  }
+
   // first get worker xtics from controller
   //  Allocate message with room for data payload
   message_t *message = malloc(sizeof(message_t));
   memset(message, 0, sizeof(message_t));
   message->mq_type = 1;
   strcpy(message->type, "NODES");
-  strcpy(message->recv_type, "NODES_TEST");
+  strcpy(message->recv_type, nodes_mq_name);
 
   // Resolve our actual LAN IP so the controller can reply across the network
   char iface[64] = {0};
@@ -48,20 +57,18 @@ void execute_fxn(ParallaxParam *params, int param_count, char *fxn_name,
       9000; // test agent listens on 9005 — controller replies here
   message->size = 0;
 
-  printf("[MasterExec] Sending NODES query with reply address %s:%d\n",
-         message->sender_ip, message->sender_port);
+  printf("[MasterExec] Sending NODES query with reply address %s:%d (queue: %s)\n",
+         message->sender_ip, message->sender_port, nodes_mq_name);
 
   send_msg(controller_ip, 9000, "outgoing", message);
   printf("[MasterExec] NODES query sent to %s:9000\n", controller_ip);
   free(message);
 
   // read nodes data that was sent to the NODES mq
-
-  map_entry *node_mq = find_by_msg_type("NODES_TEST");
+  map_entry *node_mq = find_by_msg_type(nodes_mq_name);
   queued_message received_msg;
 
   while (1) {
-
     ssize_t size = msgrcv(node_mq->queue_id, &received_msg,
                           sizeof(queued_message) - sizeof(long), 1L, 0);
     if (size < 0) {
@@ -69,6 +76,9 @@ void execute_fxn(ParallaxParam *params, int param_count, char *fxn_name,
     }
     break;
   }
+
+  // Delete the dynamic queue to avoid IPC queue leaks
+  delete_mq(nodes_mq_name);
 
   MachineMetrics *metrics = (MachineMetrics *)received_msg.data;
 

@@ -32,15 +32,6 @@ void *matcher(char *name) {
 int main() {
   printf("[SubmittedProg] Starting execution of product map-reduce task...\n");
 
-  // Create the message queue for receiving NODES responses from controller
-  create_mq("NODES_TEST", 0);
-  map_entry *node_mq = find_by_msg_type("NODES_TEST");
-  if (!node_mq) {
-    fprintf(stderr, "[SubmittedProg] Error: Failed to create NODES_TEST queue\n");
-    return 1;
-  }
-  printf("[SubmittedProg] NODES_TEST mq resolved with ID %d\n", node_mq->queue_id);
-
   // Create sample dataset (array of 12 integers, all initialized to 2)
   // Total product should be 2^12 = 4096
   int payload[12];

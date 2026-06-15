@@ -29,17 +29,6 @@ void *matcher(char *name) {
 int main() {
   printf("[SubmittedProg] Starting execution of map-reduce task...\n");
 
-  // Create the message queue for receiving NODES responses from controller
-  create_mq("NODES_TEST", 0);
-  map_entry *node_mq = find_by_msg_type("NODES_TEST");
-  if (!node_mq) {
-    fprintf(stderr,
-            "[SubmittedProg] Error: Failed to create NODES_TEST queue\n");
-    return 1;
-  }
-  printf("[SubmittedProg] NODES_TEST mq resolved with ID %d\n",
-         node_mq->queue_id);
-
   // Create sample dataset (array of integers)
   int payload[100];
   for (int i = 0; i < 100; i++) {

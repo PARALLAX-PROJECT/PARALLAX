@@ -442,7 +442,8 @@ private:
 
     // 3. Build the two globals that the generated wrappers reference.
     //    We also emit forward declarations so the wrappers in the body compile.
-    std::string escaped = escapeForCString(rewrittenCode);
+    std::string codeToEscape = "#include <string.h>\n#include \"parallax/parallax_param.h\"\n" + rewrittenCode;
+    std::string escaped = escapeForCString(codeToEscape);
 
     // Forward declarations for all generated stubs so callers in the file
     // body (e.g. main) see the correct return types before the definitions.
