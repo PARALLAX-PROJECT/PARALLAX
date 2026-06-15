@@ -12,6 +12,7 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
+#include <set>
 #include <string>
 using namespace clang;
 using namespace clang::tooling;
@@ -30,6 +31,8 @@ public:
   std::map<std::string, std::string> workerFuncs;
   // dispatch_stub_name → full C prototype string (for forward declarations)
   std::map<std::string, std::string> dispatchPrototypes;
+  // unique aggregator names used
+  std::set<std::string> aggregators;
 
   void addTranformedFunct(std::string source, std::string transformed) {
     transformedFuncs[source] = transformed;
@@ -135,6 +138,7 @@ public:
       return;
 
     int vcpus = 1;
+    std::string aggregator = "sum_reduce";
     bool has_annotation = false;
 
     for (const Attr *A : func->attrs()) {
@@ -144,6 +148,9 @@ public:
                      << func->getNameAsString() << "\n";
         if (annotation.find("vcpus:") == 0) {
           vcpus = std::stoi(annotation.substr(6));
+          has_annotation = true;
+        } else if (annotation.find("reduce:") == 0) {
+          aggregator = annotation.substr(7);
           has_annotation = true;
         } else if (annotation.find("goat:") == 0) {
           has_annotation = true;
@@ -240,9 +247,12 @@ public:
     }
 
     // fxn_name → worker stub, not the original function
-    dispatchStub += "    execute_fxn(__parallax_params, " + paramCount +
-                    ", \"" + workerName + "\", " + std::to_string(vcpus) +
-                    ", __parallax_prog_code__, __parallax_prog_name__);\n";
+    dispatchStub += "    ParallaxExecutionCtx __parallax_ctx;\n"
+                    "    __parallax_ctx.expected_node_count = " + std::to_string(vcpus) + ";\n"
+                    "    strncpy(__parallax_ctx.aggregator_name, \"" + aggregator + "\", 63);\n"
+                    "    __parallax_ctx.aggregator_name[63] = '\\0';\n"
+                    "    execute_fxn(__parallax_params, " + paramCount +
+                    ", \"" + workerName + "\", &__parallax_ctx, __parallax_prog_code__, __parallax_prog_name__);\n";
     if (returnType != "void")
       dispatchStub += "    return (" + returnType + ")NULL;\n";
     dispatchStub += "}\n";
@@ -295,6 +305,7 @@ public:
 
     metadata.addTranformedFunct(sourceFunction, dispatchName);
     metadata.addWorkerFunct(sourceFunction, workerName);
+    metadata.aggregators.insert(aggregator);
     // Store the prototype so EndSourceFileAction can forward-declare it
     metadata.addDispatchPrototype(
         dispatchName, returnType + " " + dispatchName + "(" + params + ");");
@@ -379,6 +390,14 @@ public:
       matcherCode += "        return (fn)" + pair.second + ";\n";
       matcherCode += "    }\n";
     }
+    for (const auto &agg : MymetaData.aggregators) {
+      if (agg != "sum_reduce" && !agg.empty()) {
+        matcherCode += "    if (strcmp(name, \"" + agg + "\") == 0) {\n";
+        matcherCode += "        extern void * " + agg + "(void *, void *);\n";
+        matcherCode += "        return (fn)" + agg + ";\n";
+        matcherCode += "    }\n";
+      }
+    }
     matcherCode += "    return NULL;\n";
     matcherCode += "}\n";
 
@@ -439,8 +458,7 @@ private:
         "/* === Parallax: embedded program source (auto-generated) === */\n"
         "#include <string.h>\n"
         "#include \"parallax/parallax_param.h\"\n"
-        "extern void execute_fxn(ParallaxParam *, int, char *, int, const char "
-        "*, const char *);\n" +
+        "extern void execute_fxn(ParallaxParam *, int, char *, ParallaxExecutionCtx *, const char *, const char *);\n" +
         fwdDecls + "static const char *__parallax_prog_code__ = \"" + escaped +
         "\";\n"
         "static const char *__parallax_prog_name__ = \"" +

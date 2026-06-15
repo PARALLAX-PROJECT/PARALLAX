@@ -20,7 +20,7 @@
  * prog_name   – logical name of the program / source file.
  */
 void execute_fxn(ParallaxParam *params, int param_count, char *fxn_name,
-                 int node_count, const char *prog_code, const char *prog_name);
+                 ParallaxExecutionCtx *ctx, const char *prog_code, const char *prog_name);
 
 void load_network_interface(char *iface, size_t max_len);
 void get_local_ip(char *ip, size_t max_len, const char *iface_name);

@@ -102,8 +102,8 @@ void worker_main(int argc, char **argv) {
 
 // Dummy execute_fxn to satisfy the linker for dispatch stubs in parsed files
 void execute_fxn(ParallaxParam *params, int param_count,
-                 char *fxn_name, int node_count,
+                 char *fxn_name, ParallaxExecutionCtx *ctx,
                  const char *prog_code, const char *prog_name) {
-    (void)params; (void)param_count; (void)fxn_name; (void)node_count;
+    (void)params; (void)param_count; (void)fxn_name; (void)ctx;
     (void)prog_code; (void)prog_name;
 }

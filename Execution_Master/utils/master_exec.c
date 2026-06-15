@@ -22,8 +22,15 @@ void *sum_reduce(void *a, void *b) {
   return res;
 }
 
+__attribute__((weak)) void *matcher(char *name) {
+  (void)name;
+  return NULL;
+}
+
 void execute_fxn(ParallaxParam *params, int param_count, char *fxn_name,
-                 int node_count, const char *prog_code, const char *prog_name) {
+                 ParallaxExecutionCtx *ctx, const char *prog_code, const char *prog_name) {
+
+  int node_count = ctx ? ctx->expected_node_count : 1;
 
   // first get worker xtics from controller
   //  Allocate message with room for data payload
@@ -123,8 +130,16 @@ void execute_fxn(ParallaxParam *params, int param_count, char *fxn_name,
 
   team_wait(t);
 
-  // Use the reduce function
-  t->reduce_fxn = sum_reduce;
+  // Resolve reduce function dynamically
+  void *(*reduce_fn)(void *, void *) = NULL;
+  if (ctx && strlen(ctx->aggregator_name) > 0) {
+    reduce_fn = (void *(*)(void *, void *))matcher(ctx->aggregator_name);
+  }
+  if (!reduce_fn) {
+    reduce_fn = sum_reduce;
+  }
+  t->reduce_fxn = reduce_fn;
+
   void *final_result = team_reduce(t);
 
   // Aggregate results from each thread
