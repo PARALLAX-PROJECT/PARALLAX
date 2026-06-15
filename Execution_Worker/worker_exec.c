@@ -267,7 +267,7 @@ void *execution_thread_func(void *arg) {
       strcpy(logic_path, "Execution_Worker/logic.c");
 
     char *args[] = {"gcc", prog_path, logic_path, "-Wl,-e,worker_entry",
-                    "-o",  bin_path,  NULL};
+                    "-I.", "-o", bin_path, NULL};
     execvp("gcc", args);
     perror("execution_thread_func: gcc execvp");
     exit(1);

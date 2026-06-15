@@ -295,13 +295,12 @@ void *thread_func_test(void *arg) {
          param->function_name, param->exec_node->ip);
 
   chunk_data *chunk = param->chunk;
-  int *data = (int *)chunk->chunk;
-  int count = (int)(chunk->chunk_size / sizeof(int));
-
-  printf("[Team] Chunk data (%d ints): ", count);
-  for (int i = 0; i < count; i++)
-    printf("%d ", data[i]);
-  printf("\n");
+  int p_count = 0;
+  if (chunk && chunk->chunk && chunk->chunk_size >= (int)sizeof(int)) {
+      memcpy(&p_count, chunk->chunk, sizeof(int));
+  }
+  printf("[Team] Serialized param chunk size: %d bytes, contains %d params\n",
+         chunk ? chunk->chunk_size : 0, p_count);
 
   sleep(param->tid * 3); /* staggered start to reduce contention */
 

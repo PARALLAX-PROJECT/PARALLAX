@@ -1,4 +1,4 @@
-
+#include "../../parallax/parallax_param.h"
 #include"network_agent.h"
 #include<string.h>
 #include<stdio.h>
@@ -23,7 +23,10 @@ void *sum_reduce(void *a, void *b) {
     return res;
 }
 
-void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count,char * prog_code,char * prog_name){
+void execute_fxn(ParallaxParam *params, int param_count,
+                 char *fxn_name, int node_count,
+                 const char *prog_code, const char *prog_name) {
+
     //first get worker xtics from controller
     // Allocate message with room for data payload
     message_t *message = malloc(sizeof(message_t));
@@ -88,10 +91,10 @@ void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count
     // Use the actual number of nodes instead of the hardcoded request
     node_count = (actual_node_count < node_count) ? actual_node_count : node_count;
 
-    //create task assignments
-    task_assignment * assignments = create_assignments(
-                                        data,
-                                        total_size,
+    /* ── create task assignments using the structured params ── */
+    task_assignment *assignments = create_assignments(
+                                        params,
+                                        param_count,
                                         fxn_name,
                                         metrics,
                                         node_count
@@ -100,24 +103,21 @@ void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count
     // display assignments
     for (int i = 0; i < node_count; i++) {
         chunk_data *chunk = (chunk_data *)assignments[i].chunk;
-        int *chunk_values = (int *)chunk->chunk;
-        size_t int_count = chunk->chunk_size / sizeof(int);
+        int p_count = 0;
+        if (chunk && chunk->chunk && chunk->chunk_size >= (int)sizeof(int)) {
+            memcpy(&p_count, chunk->chunk, sizeof(int));
+        }
 
         printf("\n=================================\n");
-        printf("NODE %d\n", i);
+        printf("NODE %d ASSIGNMENT DETAILS\n", i);
         printf("=================================\n");
         printf("uuid          : %s\n", metrics[i].uuid);
         printf("ip            : %s\n", metrics[i].ip);
         printf("cpu usage     : %.2f\n", metrics[i].cpu_usage);
         printf("ram usage     : %.2f\n", metrics[i].mem_usage);
         printf("function      : %s\n", assignments[i].task->function_name);
-        printf("nb chunk bytes: %d\n", chunk->chunk_size);
-        printf("chunk ints    : %zu\n", int_count);
-        printf("data preview  : ");
-        for (size_t j = 0; j < int_count && j < 5; j++) {
-            printf("%d ", chunk_values[j]);
-        }
-        printf("\n");
+        printf("nb chunk bytes: %d\n", chunk ? chunk->chunk_size : 0);
+        printf("param count   : %d\n", p_count);
     }
 
     team *t = create_and_assign_task(assignments, node_count);
@@ -159,8 +159,17 @@ void execute_fxn(void * data ,size_t total_size , char * fxn_name,int node_count
     
     if (final_result) free(final_result);
 
-    team_destroy(t);
-   
+    // Free local assignments data
+    for (int i = 0; i < node_count; i++) {
+        if (assignments[i].target_node) free(assignments[i].target_node);
+        if (assignments[i].task) free(assignments[i].task);
+        if (assignments[i].chunk) {
+            if (assignments[i].chunk->chunk) free(assignments[i].chunk->chunk);
+            free(assignments[i].chunk);
+        }
+    }
+    free(assignments);
 
+    team_destroy(t);
 }
 

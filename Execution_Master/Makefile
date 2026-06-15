@@ -26,10 +26,10 @@ bin/test_send_c_code: $(TEST_SEND_SRCS) | bin
 	gcc $(TEST_SEND_SRCS) -o bin/test_send_c_code -Iutils -I../Agent_Init/network -pthread
 
 bin/test_master_exec: $(TEST_EXEC_SRCS) | bin
-	gcc $(TEST_EXEC_SRCS) -o bin/test_master_exec -Iutils -I../Agent_Init/network -I../parallax -pthread
+	gcc $(TEST_EXEC_SRCS) -o bin/test_master_exec -Iutils -I../Agent_Init/network -I../parallax -I.. -pthread
 
 bin/test_mock_worker: $(TEST_WORKER_SRCS) | bin
-	gcc $(TEST_WORKER_SRCS) -o bin/test_mock_worker -Iutils -I../Agent_Init/network -I../parallax -pthread
+	gcc $(TEST_WORKER_SRCS) -o bin/test_mock_worker -Iutils -I../Agent_Init/network -I../parallax -I.. -pthread
 
 bin:
 	mkdir -p bin
