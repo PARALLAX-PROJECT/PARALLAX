@@ -34,9 +34,12 @@ static int pending_code_len = 0;
 static int has_pending_code = 0;
 static pthread_mutex_t pending_code_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-#define HTTP_NODES_TYPE "HTTP_NODES"
-static map_entry *http_nodes_mq_entry = NULL;
-static pthread_mutex_t http_nodes_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define HTTP_NODES_TYPE    "HTTP_NODES"
+#define HTTP_NODELOG_TYPE  "HTTP_NODELOG"
+static map_entry *http_nodes_mq_entry   = NULL;
+static map_entry *http_nodelog_mq_entry = NULL;
+static pthread_mutex_t http_nodes_mutex   = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t http_nodelog_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Extract __parallax_prog_name__ from the submitted code, e.g. "find_max" → "find_max.c" */
 static void extract_prog_name(const char *code, char *out, size_t out_size) {
@@ -375,6 +378,70 @@ static void handle_get_logs(int client_fd, const char *path) {
     }
 }
 
+static void handle_get_node_logs(int client_fd, const char *path) {
+    /* path is "/node-logs/<uuid>" */
+    const char *sub = path + 10; /* skip "/node-logs" */
+    if (*sub == '/') sub++;
+
+    if (*sub == '\0') {
+        const char *err = "{\"error\":\"provide a uuid: /node-logs/<uuid>\"}";
+        http_send_response(client_fd, 200, "application/json", err, strlen(err));
+        return;
+    }
+
+    if (!http_nodelog_mq_entry || g_receptionist.controller_ip[0] == '\0') {
+        const char *err = "{\"error\":\"not connected to controller\"}";
+        http_send_response(client_fd, 200, "application/json", err, strlen(err));
+        return;
+    }
+
+    pthread_mutex_lock(&http_nodelog_mutex);
+
+    size_t pkt_size = sizeof(message_t) + sizeof(get_node_log_req_t);
+    message_t *pkt = calloc(1, pkt_size);
+    if (pkt) {
+        pkt->mq_type = 1;
+        strcpy(pkt->type, GET_NODE_LOG_TYPE);
+        strcpy(pkt->recv_type, HTTP_NODELOG_TYPE);
+        pkt->size = sizeof(get_node_log_req_t);
+        char iface[16] = {0}, my_ip[16] = {0};
+        load_network_interface(iface, sizeof(iface));
+        get_local_ip(my_ip, sizeof(my_ip), iface);
+        strncpy(pkt->sender_ip, my_ip, sizeof(pkt->sender_ip) - 1);
+        pkt->sender_port = 9008;
+        get_node_log_req_t *req = (get_node_log_req_t *)pkt->data;
+        strncpy(req->node_uuid, sub, sizeof(req->node_uuid) - 1);
+        send_msg(g_receptionist.controller_ip, 9000, "receptionist_out", pkt);
+        free(pkt);
+    }
+
+    queued_message qmsg;
+    memset(&qmsg, 0, sizeof(qmsg));
+    int got = 0;
+    for (int i = 0; i < 50 && !got; i++) {
+        ssize_t ret = msgrcv(http_nodelog_mq_entry->queue_id, &qmsg,
+                             sizeof(qmsg) - sizeof(long), 1L, IPC_NOWAIT);
+        if (ret >= 0) got = 1;
+        else usleep(100000);
+    }
+
+    pthread_mutex_unlock(&http_nodelog_mutex);
+
+    if (!got) {
+        const char *err = "timeout waiting for controller";
+        http_send_response(client_fd, 200, "text/plain", err, strlen(err));
+        return;
+    }
+
+    node_log_t *log = (node_log_t *)qmsg.data;
+    if (log->log_size == 0) {
+        const char *err = "no log available for this node yet";
+        http_send_response(client_fd, 404, "text/plain", err, strlen(err));
+        return;
+    }
+    http_send_response(client_fd, 200, "text/plain", log->log_content, log->log_size);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  THREAD 2: CODE SUBMISSION PROCESSOR THREAD
 //  Listens as a basic HTTP server on port 9010 and prints the body
@@ -383,11 +450,16 @@ static void handle_get_logs(int client_fd, const char *path) {
 void* code_submission_listener_thread(void* arg) {
     (void)arg;
 
-    /* Set up the NODES reply queue before accepting connections */
+    /* Set up reply queues before accepting connections */
     create_mq(HTTP_NODES_TYPE, NETWORK_AGENT_MAX_DATA);
     http_nodes_mq_entry = find_by_msg_type(HTTP_NODES_TYPE);
     if (!http_nodes_mq_entry)
         printf("[RECEPTIONIST] WARNING: Could not create HTTP_NODES queue\n");
+
+    create_mq(HTTP_NODELOG_TYPE, NETWORK_AGENT_MAX_DATA);
+    http_nodelog_mq_entry = find_by_msg_type(HTTP_NODELOG_TYPE);
+    if (!http_nodelog_mq_entry)
+        printf("[RECEPTIONIST] WARNING: Could not create HTTP_NODELOG queue\n");
 
     connection *listener = create_listener("0.0.0.0", RECEPTIONIST_LISTENING_PORT, 5);
     if (!listener) {
@@ -421,6 +493,8 @@ void* code_submission_listener_thread(void* arg) {
 
             if (strcmp(method, "GET") == 0 && strcmp(path, "/nodes") == 0) {
                 handle_get_nodes(client_fd);
+            } else if (strcmp(method, "GET") == 0 && strncmp(path, "/node-logs", 10) == 0) {
+                handle_get_node_logs(client_fd, path);
             } else if (strcmp(method, "GET") == 0 && strncmp(path, "/logs", 5) == 0) {
                 handle_get_logs(client_fd, path);
             } else {

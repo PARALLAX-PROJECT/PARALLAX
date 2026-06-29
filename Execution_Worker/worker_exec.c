@@ -19,6 +19,8 @@
 
 #include "worker_exec.h"
 #include "ms_queue.h"
+#include "net_utils.h"
+#include "../../parallax/state_message.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -337,6 +339,72 @@ static int revive_existing_binary(const char *prog_name, char *out_task_mq) {
   strncpy(out_task_mq, task_mq, 63);
   out_task_mq[63] = '\0';
   return 0;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Worker lifecycle log sender
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+static char g_log_path[256]       = {0};
+static char g_ctrl_ip[16]         = {0};
+static char g_worker_uuid[37]     = {0};
+static volatile int log_sender_on = 0;
+
+static void *log_sender_thread(void *arg) {
+    (void)arg;
+    while (log_sender_on) {
+        sleep(NODE_LOG_INTERVAL);
+
+        FILE *f = fopen(g_log_path, "r");
+        if (!f) continue;
+
+        /* Send only the tail (last 6900 bytes) to fit in node_log_t */
+        fseek(f, 0, SEEK_END);
+        long fsize = ftell(f);
+        long offset = (fsize > 6900) ? fsize - 6900 : 0;
+        fseek(f, offset, SEEK_SET);
+
+        node_log_t snap;
+        memset(&snap, 0, sizeof(snap));
+        strncpy(snap.uuid, g_worker_uuid, sizeof(snap.uuid) - 1);
+        snap.log_size = (uint32_t)fread(snap.log_content, 1,
+                                         sizeof(snap.log_content) - 1, f);
+        fclose(f);
+
+        size_t pkt_size = sizeof(message_t) + sizeof(node_log_t);
+        message_t *pkt = malloc(pkt_size);
+        if (!pkt) continue;
+        memset(pkt, 0, pkt_size);
+        pkt->mq_type = 1;
+        strcpy(pkt->type, NODE_LOG_TYPE);
+        pkt->size = sizeof(node_log_t);
+        memcpy(pkt->data, &snap, sizeof(node_log_t));
+        send_msg(g_ctrl_ip, 9000, "outgoing", pkt);
+        free(pkt);
+    }
+    return NULL;
+}
+
+void worker_log_sender_start(const char *controller_ip, const char *uuid) {
+    strncpy(g_ctrl_ip,     controller_ip, sizeof(g_ctrl_ip)     - 1);
+    strncpy(g_worker_uuid, uuid,          sizeof(g_worker_uuid) - 1);
+
+    mkdir("worker_logs", 0777);
+    snprintf(g_log_path, sizeof(g_log_path), "worker_logs/%s.log", uuid);
+
+    /* Redirect stdout + stderr to the log file so the full lifecycle is captured */
+    int logfd = open(g_log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (logfd >= 0) {
+        dup2(logfd, STDOUT_FILENO);
+        dup2(logfd, STDERR_FILENO);
+        close(logfd);
+        setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered — don't lose logs on crash */
+    }
+
+    log_sender_on = 1;
+    pthread_t t;
+    pthread_create(&t, NULL, log_sender_thread, NULL);
+    pthread_detach(t);
 }
 
 /* --------------------------------------------------------------------------

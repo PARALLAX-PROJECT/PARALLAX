@@ -286,6 +286,7 @@ static void start_threads(void) {
   switch (agent.role) {
   case ROLE_WORKER:
     if (!agent.threads.worker_exec_active) {
+      worker_log_sender_start(controller_ip, get_agent_uuid());
       pthread_create(&agent.threads.worker_exec, NULL, worker_exec_thread,
                      NULL);
       agent.threads.worker_exec_active = 1;

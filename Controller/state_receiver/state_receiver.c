@@ -382,10 +382,8 @@ static void update_heartbeat(MachineHeartbeat* hb, const char* sender_ip, int se
     if (hb->role != ROLE_UNKNOWN) {
         node->role = hb->role;
     }
-    
-    printf("[HEARTBEAT] Heartbeat from %s - last_heartbeat updated (status: %d, ip: %s, port: %d)\n", 
-           hb->uuid, node->status, node->ip, node->port);
 
+    printf("[HB] %.8s... %s\n", hb->uuid, node->ip);
     pthread_mutex_unlock(&g_node_table.lock);
 }
 
@@ -396,9 +394,7 @@ static void update_metrics(MachineMetrics* msg) {
     if (!msg || strlen(msg->uuid) == 0) return;
     pthread_mutex_lock(&g_node_table.lock);
 
-    printf("\n\n\nFrom update Metrics");
-    //print_machine_metrics(msg);
-   //printf("[StateReceiver] Received a Heartbeat\n");
+;
     NodeInfo* node = node_table_find(&g_node_table, msg->uuid);
     if (!node) {
         printf("[StateReceiver] ⚠ Nœud inconnu %s, auto-enregistrement...\n", msg->uuid);
@@ -443,8 +439,6 @@ static void init_metrics(MachineMetrics* msg) {
     pthread_mutex_lock(&g_node_table.lock);
 
 
-     printf("\n\n\nFrom init Statecapture");
-    print_machine_metrics(msg);
 
     
     NodeInfo* node = node_table_find(&g_node_table, msg->uuid);
@@ -514,7 +508,6 @@ void * statecapture_init_func(void * arg){
         // Le payload du network_agent est dans qmsg.data
         MachineMetrics *msg = (MachineMetrics *)qmsg.data;
         init_metrics(msg);
-        printf("[STATECAPTURE_INIT] Received STATECAPTURE_INIT message from %s\n", msg->uuid);
         }
 
 
@@ -536,8 +529,7 @@ void * heartbeat_receiver_func(void * arg){
             // Le payload du network_agent est dans qmsg.data
             MachineHeartbeat *hb = (MachineHeartbeat *)qmsg.data;
             update_heartbeat(hb, qmsg.sender_ip, qmsg.sender_port);
-            printf("[HEARTBEAT] Received heartbeat from %s\n", hb->uuid);
-        }
+            }
         
         return NULL;
 }
@@ -557,7 +549,6 @@ void * statecapture_func(void * arg){
         // Le payload du network_agent est dans qmsg.data
         MachineMetrics *msg = (MachineMetrics *)qmsg.data;
         update_metrics(msg);
-        printf("[STATECAPTURE] Received STATECAPTURE message from %s\n", msg->uuid);
         }
         return NULL;
 }
@@ -601,6 +592,79 @@ void * hello_func(void * arg){
         // Reply directly to the agent's UDP port (msg->port + 1)
         send_broadcast_message(msg->port + 1, reply);
         free(reply);
+    }
+    return NULL;
+}
+
+void *node_log_receiver_func(void *arg) {
+    (void)arg;
+    create_mq(NODE_LOG_TYPE, sizeof(queued_message));
+    map_entry *mq = find_by_msg_type(NODE_LOG_TYPE);
+    if (!mq) return NULL;
+
+    mkdir("node_logs", 0777);
+    printf("[Controller] Node log receiver started\n");
+
+    queued_message qmsg;
+    while (1) {
+        ssize_t ret = msgrcv(mq->queue_id, &qmsg,
+                             sizeof(qmsg) - sizeof(long), 1L, IPC_NOWAIT);
+        if (ret == -1) { usleep(100000); continue; }
+
+        node_log_t *log = (node_log_t *)qmsg.data;
+
+        char path[256];
+        snprintf(path, sizeof(path), "node_logs/%s.log", log->uuid);
+        FILE *f = fopen(path, "w"); /* overwrite — keep only the latest snapshot */
+        if (f) {
+            fwrite(log->log_content, 1, log->log_size, f);
+            fclose(f);
+            printf("[Controller] Node log updated: %s (%u bytes)\n",
+                   log->uuid, log->log_size);
+        }
+    }
+    return NULL;
+}
+
+void *get_node_log_func(void *arg) {
+    (void)arg;
+    create_mq(GET_NODE_LOG_TYPE, sizeof(queued_message));
+    map_entry *mq = find_by_msg_type(GET_NODE_LOG_TYPE);
+    if (!mq) return NULL;
+
+    printf("[Controller] Get-node-log handler started\n");
+
+    queued_message qmsg;
+    while (1) {
+        ssize_t ret = msgrcv(mq->queue_id, &qmsg,
+                             sizeof(qmsg) - sizeof(long), 1L, IPC_NOWAIT);
+        if (ret == -1) { usleep(100000); continue; }
+
+        get_node_log_req_t *req = (get_node_log_req_t *)qmsg.data;
+
+        node_log_t resp_log;
+        memset(&resp_log, 0, sizeof(resp_log));
+        strncpy(resp_log.uuid, req->node_uuid, sizeof(resp_log.uuid) - 1);
+
+        char path[256];
+        snprintf(path, sizeof(path), "node_logs/%s.log", req->node_uuid);
+        FILE *f = fopen(path, "r");
+        if (f) {
+            resp_log.log_size = (uint32_t)fread(resp_log.log_content, 1,
+                                                 sizeof(resp_log.log_content) - 1, f);
+            fclose(f);
+        }
+
+        size_t pkt_size = sizeof(message_t) + sizeof(node_log_t);
+        message_t *pkt = malloc(pkt_size);
+        if (!pkt) continue;
+        memset(pkt, 0, pkt_size);
+        pkt->mq_type = 1;
+        strcpy(pkt->type, qmsg.recv_type);
+        pkt->size = sizeof(node_log_t);
+        memcpy(pkt->data, &resp_log, sizeof(node_log_t));
+        send_msg(qmsg.sender_ip, qmsg.sender_port, "outgoing", pkt);
+        free(pkt);
     }
     return NULL;
 }
@@ -844,6 +908,8 @@ void* state_receiver_thread_run(void* arg) {
     pthread_t heartbeat_monitor_thread;
     pthread_t request_master_ip_thread;
     pthread_t log_relay_thread;
+    pthread_t node_log_receiver_thread;
+    pthread_t get_node_log_thread;
 
     pthread_create(&statecapture_init_thread, NULL, statecapture_init_func, (void *)statecapture_init_entry);
     pthread_create(&statecapture_thread, NULL, statecapture_func, (void *)statecapture_entry);
@@ -853,6 +919,8 @@ void* state_receiver_thread_run(void* arg) {
     pthread_create(&heartbeat_thread, NULL, heartbeat_receiver_func, (void *)heartbeat_entry);
     pthread_create(&request_master_ip_thread, NULL, request_master_ip_func, (void *)request_master_ip_entry);
     pthread_create(&log_relay_thread, NULL, log_relay_func, (void *)prog_log_entry);
+    pthread_create(&node_log_receiver_thread, NULL, node_log_receiver_func, NULL);
+    pthread_create(&get_node_log_thread, NULL, get_node_log_func, NULL);
     
     // Start heartbeat monitor thread
     atomic_store(&heartbeat_monitor_running, 1);
