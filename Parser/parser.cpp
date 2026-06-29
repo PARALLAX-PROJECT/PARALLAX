@@ -1,5 +1,7 @@
 #include <iostream>
 #include <sstream>
+#include <fstream>
+#include <climits>
 
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
@@ -34,12 +36,25 @@ public:
   // unique aggregator names used
   std::set<std::string> aggregators;
 
+  // source_name → full worker stub C source (for __parallax_prog_code__)
+  std::map<std::string, std::string> workerStubTexts;
+  // source_name → source function body C source (for __parallax_prog_code__)
+  std::map<std::string, std::string> sourceFuncTexts;
+
   void addTranformedFunct(std::string source, std::string transformed) {
     transformedFuncs[source] = transformed;
   }
 
   void addWorkerFunct(std::string source, std::string worker) {
     workerFuncs[source] = worker;
+  }
+
+  void addWorkerStubText(std::string source, std::string stubText) {
+    workerStubTexts[source] = stubText;
+  }
+
+  void addSourceFuncText(std::string source, std::string funcText) {
+    sourceFuncTexts[source] = funcText;
   }
 
   void addDispatchPrototype(std::string dispatchName, std::string proto) {
@@ -56,6 +71,60 @@ public:
     }
   }
 };
+
+// ── Amalgamation helpers ────────────────────────────────────────────────────
+
+static std::string getDirname(const std::string &path) {
+  size_t pos = path.rfind('/');
+  return pos != std::string::npos ? path.substr(0, pos) : ".";
+}
+
+// Recursively inline local #include "..." files into a single string.
+// System headers (#include <...>) are left as-is.
+// parallax/ headers are left as-is (available on every worker node).
+// seen prevents double-inlining (soft include guard).
+static std::string inlineLocalIncludes(const std::string &filePath,
+                                       std::set<std::string> &seen) {
+  char resolved[PATH_MAX];
+  if (!realpath(filePath.c_str(), resolved))
+    return "";
+  std::string canonical(resolved);
+  if (!seen.insert(canonical).second)
+    return ""; // already inlined
+
+  std::ifstream f(canonical);
+  if (!f.is_open())
+    return "";
+
+  std::string result;
+  std::string line;
+  std::string dir = getDirname(canonical);
+
+  while (std::getline(f, line)) {
+    std::string trimmed = line;
+    size_t s = trimmed.find_first_not_of(" \t");
+    if (s != std::string::npos)
+      trimmed = trimmed.substr(s);
+
+    if (trimmed.size() > 10 && trimmed.compare(0, 9, "#include ") == 0 &&
+        trimmed[9] == '"') {
+      size_t end = trimmed.find('"', 10);
+      if (end != std::string::npos) {
+        std::string incFile = trimmed.substr(10, end - 10);
+        if (incFile.find("parallax/") == 0) {
+          result += line + "\n"; // keep parallax headers as-is
+        } else {
+          result += inlineLocalIncludes(dir + "/" + incFile, seen);
+        }
+        continue;
+      }
+    }
+    result += line + "\n";
+  }
+  return result;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 
 class PrintHandler : public MatchFinder::MatchCallback {
 private:
@@ -178,9 +247,6 @@ public:
     std::string paramCount = std::to_string(func->getNumParams());
 
     // ── Look-ahead pass: find the "size companion" for each pointer param ──
-    // Convention: if param[i] is a pointer AND param[i+1] is an integer type,
-    // then param[i+1] is the byte-size of the data param[i] points to.
-    // sizeCompanion[i] holds the index of the size param, or -1 if none.
     std::vector<int> sizeCompanion(func->getNumParams(), -1);
     for (unsigned i = 0; i + 1 < func->getNumParams(); ++i) {
       const ParmVarDecl *P = func->getParamDecl(i);
@@ -191,10 +257,6 @@ public:
     }
 
     // ── 1. DISPATCH STUB (_generated) ─────────────────────────────────────
-    // Replaces every call site on the master side.
-    // Packs original args into ParallaxParam[] and hands off to execute_fxn.
-    // The fxn_name given to execute_fxn is the WORKER stub name so the worker
-    // node can look it up via matcher().
     std::string dispatchStub = "\n" + returnType + " " + dispatchName + "(" +
                                params +
                                ") {\n"
@@ -214,7 +276,6 @@ public:
         dist = "PARALLAX_SCATTER";
         firstScatterDone = true;
       } else if (!isPtr && i > 0 && sizeCompanion[i - 1] == (int)i) {
-        // this param is the size companion of the previous pointer param
         dist = "PARALLAX_SIZE_OF";
       } else {
         dist = "PARALLAX_BROADCAST";
@@ -223,12 +284,9 @@ public:
       dispatchStub += "    __parallax_params[" + idx + "].data = (void *)";
       dispatchStub += (isPtr ? pName : ("&" + pName)) + ";\n";
 
-      // size: for pointer params use the look-ahead companion if available,
-      //       for value params use sizeof, for size-companion params use 0
       dispatchStub += "    __parallax_params[" + idx + "].size = ";
       if (isPtr) {
         if (sizeCompanion[i] >= 0) {
-          // size is the value of the next (companion) param
           dispatchStub +=
               func->getParamDecl(sizeCompanion[i])->getNameAsString() + ";\n";
         } else {
@@ -246,20 +304,32 @@ public:
                       "].type_name, \"" + pType + "\", 63);\n";
     }
 
-    // fxn_name → worker stub, not the original function
     dispatchStub += "    ParallaxExecutionCtx __parallax_ctx;\n"
-                    "    __parallax_ctx.expected_node_count = " + std::to_string(vcpus) + ";\n"
-                    "    strncpy(__parallax_ctx.aggregator_name, \"" + aggregator + "\", 63);\n"
+                    "    __parallax_ctx.expected_node_count = " +
+                    std::to_string(vcpus) +
+                    ";\n"
+                    "    strncpy(__parallax_ctx.aggregator_name, \"" +
+                    aggregator +
+                    "\", 63);\n"
                     "    __parallax_ctx.aggregator_name[63] = '\\0';\n"
-                    "    execute_fxn(__parallax_params, " + paramCount +
-                    ", \"" + workerName + "\", &__parallax_ctx, __parallax_prog_code__, __parallax_prog_name__);\n";
-    if (returnType != "void")
-      dispatchStub += "    return (" + returnType + ")NULL;\n";
+                    "    execute_fxn(__parallax_params, " +
+                    paramCount + ", \"" + workerName +
+                    "\", &__parallax_ctx, __parallax_prog_code__, "
+                    "__parallax_prog_name__);\n";
+
+    // Fix 3: correct return value for all return-type categories
+    if (returnType != "void") {
+      if (func->getReturnType()->isPointerType())
+        dispatchStub += "    return NULL;\n";
+      else if (func->getReturnType()->isIntegerType() ||
+               func->getReturnType()->isFloatingType())
+        dispatchStub += "    return (" + returnType + ")0;\n";
+      else
+        dispatchStub += "    return (" + returnType + "){0};\n";
+    }
     dispatchStub += "}\n";
 
     // ── 2. WORKER STUB (_worker) ───────────────────────────────────────────
-    // Executed on the worker node. Receives a ParallaxParam*, deserializes
-    // every argument back to its original type, then calls the real function.
     std::string workerStub =
         "\nvoid *" + workerName +
         "(void *__arg) {\n"
@@ -274,11 +344,9 @@ public:
       bool isPtr = P->getType()->isPointerType();
 
       if (isPtr) {
-        // pointer — cast data directly
         workerStub += "    " + pType + " " + pName + " = (" + pType + ")__p[" +
                       idx + "].data;\n";
       } else {
-        // value — dereference through a typed pointer
         workerStub += "    " + pType + " " + pName + " = *(" + pType +
                       " *)__p[" + idx + "].data;\n";
       }
@@ -297,18 +365,43 @@ public:
     }
     workerStub += "}\n";
 
+    // Fix 4: only dispatch stub goes into master binary.
+    // Worker stub lives only in __parallax_prog_code__ — workers compile their
+    // own binary, master never calls the worker stub directly.
     clang::SourceLocation endOfFile =
         rewriter.getSourceMgr().getLocForEndOfFile(
             rewriter.getSourceMgr().getMainFileID());
     rewriter.InsertText(endOfFile, dispatchStub, true, true);
-    rewriter.InsertText(endOfFile, workerStub, true, true);
 
     metadata.addTranformedFunct(sourceFunction, dispatchName);
     metadata.addWorkerFunct(sourceFunction, workerName);
+    metadata.addWorkerStubText(sourceFunction, workerStub);
     metadata.aggregators.insert(aggregator);
-    // Store the prototype so EndSourceFileAction can forward-declare it
     metadata.addDispatchPrototype(
         dispatchName, returnType + " " + dispatchName + "(" + params + ");");
+
+    // Fix 2: capture CLEAN source function text (no Parallax annotations) for
+    // __parallax_prog_code__. Reconstruct from AST components instead of raw
+    // source text so __attribute__((annotate(...))) is never embedded in the
+    // code shipped to workers.
+    const Stmt *body = func->getBody();
+    if (body) {
+      SourceManager &SM = rewriter.getSourceMgr();
+      const LangOptions &LO = rewriter.getLangOpts();
+      SourceRange bodyRange = body->getSourceRange();
+      clang::SourceLocation bodyEnd =
+          clang::Lexer::getLocForEndOfToken(bodyRange.getEnd(), 0, SM, LO);
+      bool invalid = false;
+      StringRef bodyText = clang::Lexer::getSourceText(
+          clang::CharSourceRange::getCharRange(bodyRange.getBegin(), bodyEnd),
+          SM, LO, &invalid);
+      if (!invalid) {
+        std::string cleanFunc =
+            returnType + " " + sourceFunction + "(" + params + ") " +
+            bodyText.str();
+        metadata.addSourceFuncText(sourceFunction, cleanFunc);
+      }
+    }
   }
 };
 
@@ -376,24 +469,19 @@ public:
 
   void HandleTranslationUnit(ASTContext &context) override {
     FunctionMatcher.matchAST(context);
+    VariableMatcher.matchAST(context); // Fix 1: was registered but never invoked
     MymetaData.printAllTransformedFunctions();
     CallExprMatcher.matchAST(context);
 
-    // Append the matcher() lookup function.
-    // It maps WORKER stub names so the worker node can look up the right
-    // function.
+    // Fix 4: master's matcher only needs aggregator functions.
+    // Worker stubs are resolved on the worker side via their own matcher
+    // (inside __parallax_prog_code__). Master uses matcher solely to look up
+    // the user-supplied reduce function by name at aggregation time.
     std::string matcherCode = "\n\ntypedef void *(*fn)(void *);\n\n";
     matcherCode += "fn matcher(char *name) {\n";
-    for (const auto &pair : MymetaData.workerFuncs) {
-      // pair.second is the worker stub name (e.g. "sum_worker")
-      matcherCode += "    if (strcmp(name, \"" + pair.second + "\") == 0) {\n";
-      matcherCode += "        return (fn)" + pair.second + ";\n";
-      matcherCode += "    }\n";
-    }
     for (const auto &agg : MymetaData.aggregators) {
       if (agg != "sum_reduce" && !agg.empty()) {
         matcherCode += "    if (strcmp(name, \"" + agg + "\") == 0) {\n";
-        matcherCode += "        extern void * " + agg + "(void *, void *);\n";
         matcherCode += "        return (fn)" + agg + ";\n";
         matcherCode += "    }\n";
       }
@@ -440,32 +528,108 @@ private:
     if (dotPos != std::string::npos)
       progName = progName.substr(0, dotPos);
 
-    // 3. Build the two globals that the generated wrappers reference.
-    //    We also emit forward declarations so the wrappers in the body compile.
-    std::string codeToEscape = "#include <string.h>\n#include \"parallax/parallax_param.h\"\n" + rewrittenCode;
-    std::string escaped = escapeForCString(codeToEscape);
+    // 3. Build a MINIMAL worker-only code string.
+    //    Workers only need: computation functions, _worker stubs, matcher.
+    //    They must NOT get master-side dispatch stubs or references to
+    //    __parallax_prog_code__/__parallax_prog_name__ (undefined on worker).
+    //
+    //    Fix 5: inline local #include "..." files from the original source so
+    //    workers have all user-defined types and helper functions available
+    //    when they compile the embedded code with gcc.
+    std::set<std::string> inlinedFiles;
+    std::string localIncludeCode;
+    std::string extraSystemHeaders;
+    // These three are always emitted in the hardcoded defaults below.
+    std::set<std::string> defaultSysHeaders = {"<stdio.h>", "<stdlib.h>", "<string.h>"};
+    {
+      std::string dir = getDirname(originalFile);
+      std::ifstream origSrc(originalFile);
+      std::string srcLine;
+      while (std::getline(origSrc, srcLine)) {
+        std::string trimmed = srcLine;
+        size_t s = trimmed.find_first_not_of(" \t");
+        if (s != std::string::npos)
+          trimmed = trimmed.substr(s);
+        if (trimmed.size() > 10 && trimmed.compare(0, 9, "#include ") == 0) {
+          if (trimmed[9] == '<') {
+            // System header: forward to worker unless already in defaults.
+            size_t end = trimmed.find('>');
+            if (end != std::string::npos) {
+              std::string hdr = trimmed.substr(9, end - 8);
+              if (defaultSysHeaders.find(hdr) == defaultSysHeaders.end())
+                extraSystemHeaders += srcLine + "\n";
+            }
+          } else if (trimmed[9] == '"') {
+            size_t end = trimmed.find('"', 10);
+            if (end != std::string::npos) {
+              std::string incFile = trimmed.substr(10, end - 10);
+              if (incFile.find("parallax/") == 0) {
+                localIncludeCode += srcLine + "\n";
+              } else {
+                localIncludeCode +=
+                    inlineLocalIncludes(dir + "/" + incFile, inlinedFiles);
+              }
+            }
+          }
+        }
+      }
+    }
 
-    // Forward declarations for all generated stubs so callers in the file
-    // body (e.g. main) see the correct return types before the definitions.
+    std::string workerOnlyCode;
+    workerOnlyCode += "#include <stdio.h>\n";
+    workerOnlyCode += "#include <stdlib.h>\n";
+    workerOnlyCode += "#include <string.h>\n";
+    workerOnlyCode += "#include \"parallax/parallax_param.h\"\n";
+    if (!extraSystemHeaders.empty())
+      workerOnlyCode += extraSystemHeaders;
+    if (!localIncludeCode.empty())
+      workerOnlyCode += localIncludeCode;
+    workerOnlyCode += "\n";
+
+    for (const auto &pair : metaData.workerFuncs) {
+      const std::string &srcName = pair.first;
+
+      auto srcIt = metaData.sourceFuncTexts.find(srcName);
+      if (srcIt != metaData.sourceFuncTexts.end())
+        workerOnlyCode += srcIt->second + "\n\n";
+
+      auto wrkIt = metaData.workerStubTexts.find(srcName);
+      if (wrkIt != metaData.workerStubTexts.end())
+        workerOnlyCode += wrkIt->second + "\n\n";
+    }
+
+    // Worker's matcher: maps worker stub names to function pointers
+    workerOnlyCode += "\ntypedef void *(*fn)(void *);\n\n";
+    workerOnlyCode += "fn matcher(char *name) {\n";
+    for (const auto &pair : metaData.workerFuncs) {
+      workerOnlyCode += "    if (strcmp(name, \"" + pair.second + "\") == 0) {\n";
+      workerOnlyCode += "        return (fn)" + pair.second + ";\n";
+      workerOnlyCode += "    }\n";
+    }
+    workerOnlyCode += "    return NULL;\n";
+    workerOnlyCode += "}\n";
+    workerOnlyCode += "\nint main() { return 0; }\n";
+
+    std::string escaped = escapeForCString(workerOnlyCode);
+
+    // 4. Forward declarations for master-side output.
+    //    Fix 4: only dispatch stubs — worker stubs are NOT in the master binary.
     std::string fwdDecls;
     for (const auto &pair : metaData.dispatchPrototypes) {
       fwdDecls += pair.second + "\n";
-    }
-    for (const auto &pair : metaData.workerFuncs) {
-      fwdDecls += "void *" + pair.second + "(void *);\n";
     }
 
     std::string header =
         "/* === Parallax: embedded program source (auto-generated) === */\n"
         "#include <string.h>\n"
         "#include \"parallax/parallax_param.h\"\n"
-        "extern void execute_fxn(ParallaxParam *, int, char *, ParallaxExecutionCtx *, const char *, const char *);\n" +
-        fwdDecls + "static const char *__parallax_prog_code__ = \"" + escaped +
-        "\";\n"
-        "static const char *__parallax_prog_name__ = \"" +
-        progName + "\";\n\n";
+        "extern void execute_fxn(ParallaxParam *, int, char *, "
+        "ParallaxExecutionCtx *, const char *, const char *);\n" +
+        fwdDecls +
+        "static const char *__parallax_prog_code__ = \"" + escaped + "\";\n"
+        "static const char *__parallax_prog_name__ = \"" + progName + "\";\n\n";
 
-    // 4. Write: header globals first, then the full rewritten source
+    // 5. Write: header globals first, then the full rewritten source
     std::string outputFile = originalFile + "_parsed.c";
     std::error_code EC;
     llvm::raw_fd_ostream outFile(outputFile, EC, llvm::sys::fs::OF_Text);

@@ -1,10 +1,12 @@
 #include "master_thread.h"
 #include "ms_queue.h"
+#include "net_utils.h"
 #include "network_agent.h"
 #include "node_details.h"
 #include "orchestrator.h"
 #include "parallax_team.h"
 #include "pthread.h"
+#include "../../parallax/state_message.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,10 +107,39 @@ void *prog_listener_func(void *args) {
   printf("[Master] Compiling program: %s\n", compile_cmd);
   if (system(compile_cmd) == 0) {
     printf("[Master] Program compiled successfully.\n");
-    snprintf(run_cmd, sizeof(run_cmd), "%s/bin_%s", PROG_DIR,
-             prog->program_name);
-    printf("[Master] Executing program: %s\n", run_cmd);
+
+    char log_path[512];
+    snprintf(log_path, sizeof(log_path), "%s/%s.log", PROG_DIR, prog->program_name);
+
+    snprintf(run_cmd, sizeof(run_cmd), "%s/bin_%s > %s 2>&1",
+             PROG_DIR, prog->program_name, log_path);
+    printf("[Master] Executing program, output -> %s\n", log_path);
     system(run_cmd);
+    printf("[Master] Program finished. Log at: %s\n", log_path);
+
+    /* Read the log and ship it to the controller */
+    FILE *lf = fopen(log_path, "r");
+    if (lf) {
+      prog_log_t log_msg;
+      memset(&log_msg, 0, sizeof(log_msg));
+      strncpy(log_msg.prog_name, prog->program_name, sizeof(log_msg.prog_name) - 1);
+      log_msg.log_size = (uint32_t)fread(log_msg.log_content,
+                                         1, sizeof(log_msg.log_content) - 1, lf);
+      fclose(lf);
+
+      size_t pkt_size = sizeof(message_t) + sizeof(prog_log_t);
+      message_t *pkt = malloc(pkt_size);
+      if (pkt) {
+        memset(pkt, 0, pkt_size);
+        pkt->mq_type = 1;
+        strcpy(pkt->type, PROG_LOG_TYPE);
+        pkt->size = sizeof(prog_log_t);
+        memcpy(pkt->data, &log_msg, sizeof(prog_log_t));
+        send_msg(controller_ip, 9000, "outgoing", pkt);
+        free(pkt);
+        printf("[Master] Execution log sent to controller\n");
+      }
+    }
   } else {
     printf("[Master] Program compilation failed.\n");
   }

@@ -7,7 +7,7 @@
 #define MAX_CODE_SIZE    7500
 
 typedef struct {
-    
+
     char program_name[MAX_PROGRAM_NAME];
 
     uint32_t code_size;

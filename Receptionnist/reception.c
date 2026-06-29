@@ -4,6 +4,8 @@
 #include "socket.h"
 #include "ms_queue.h"
 #include "master_thread.h"
+#include "../parallax/state_message.h"
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -328,25 +330,73 @@ static int discover_controller(void) {
 //  PUBLIC API
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  THREAD 3: EXECUTION LOG RECEIVER
+//  Reads PROG_LOG messages from the IPC queue and writes each to a file.
+// ═══════════════════════════════════════════════════════════════════════════
+
+void *log_receiver_thread(void *arg) {
+    (void)arg;
+
+    create_mq(PROG_LOG_TYPE, 0);
+    map_entry *log_entry = find_by_msg_type(PROG_LOG_TYPE);
+    if (!log_entry) {
+        printf("[RECEPTIONIST] ERROR: Could not create PROG_LOG queue\n");
+        return NULL;
+    }
+
+    mkdir("logs", 0777);
+
+    queued_message qmsg;
+    while (atomic_load(&receptionist_running)) {
+        ssize_t ret = msgrcv(log_entry->queue_id, &qmsg,
+                             sizeof(qmsg) - sizeof(long), 1L, IPC_NOWAIT);
+        if (ret == -1) {
+            usleep(100000);
+            continue;
+        }
+
+        prog_log_t *log = (prog_log_t *)qmsg.data;
+
+        char log_path[256];
+        snprintf(log_path, sizeof(log_path), "logs/%s.log", log->prog_name);
+
+        FILE *f = fopen(log_path, "w");
+        if (f) {
+            fwrite(log->log_content, 1, log->log_size, f);
+            fclose(f);
+            printf("[RECEPTIONIST] Log received for '%s' (%u bytes) -> %s\n",
+                   log->prog_name, log->log_size, log_path);
+        } else {
+            perror("[RECEPTIONIST] fopen log file");
+        }
+    }
+    return NULL;
+}
+
 void receptionist_init(void) {
     memset(&g_receptionist, 0, sizeof(ReceptionistState));
     strncpy(g_receptionist.uuid, get_agent_uuid(), sizeof(g_receptionist.uuid) - 1);
-    
+
     if (!discover_controller()) {
         printf("[RECEPTIONIST] ERROR: Failed to discover controller\n");
         return;
     }
-    
+
     atomic_store(&receptionist_running, 1);
-    
+
     pthread_t query_thread;
     pthread_create(&query_thread, NULL, receptionist_thread, NULL);
     pthread_detach(query_thread);
-    
+
     pthread_t listener_thread;
     pthread_create(&listener_thread, NULL, code_submission_listener_thread, NULL);
     pthread_detach(listener_thread);
-    
+
+    pthread_t log_thread;
+    pthread_create(&log_thread, NULL, log_receiver_thread, NULL);
+    pthread_detach(log_thread);
+
     printf("[RECEPTIONIST] Started\n");
 }
 

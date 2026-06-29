@@ -537,6 +537,57 @@ void * hello_func(void * arg){
     return NULL;
 }
 
+void *log_relay_func(void *arg) {
+    map_entry *log_entry = (map_entry *)arg;
+    queued_message qmsg;
+
+    printf("[Controller] Log relay thread started\n");
+
+    while (1) {
+        ssize_t ret = msgrcv(log_entry->queue_id, &qmsg,
+                             sizeof(qmsg) - sizeof(long), 1L, IPC_NOWAIT);
+        if (ret == -1) {
+            usleep(100000);
+            continue;
+        }
+
+        /* Find an active receptionist in the node table */
+        char recep_ip[16] = "";
+        int  recep_port   = 0;
+
+        pthread_mutex_lock(&g_node_table.lock);
+        for (NodeInfo *n = g_node_table.head; n; n = n->next) {
+            if (n->role == ROLE_RECEPTIONIST && n->status != NODE_EN_PANNE) {
+                strncpy(recep_ip, n->ip, sizeof(recep_ip) - 1);
+                recep_port = n->port;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_node_table.lock);
+
+        if (recep_port == 0) {
+            printf("[Controller] No receptionist connected — log dropped\n");
+            continue;
+        }
+
+        /* Forward the log message as-is */
+        size_t pkt_size = sizeof(message_t) + sizeof(prog_log_t);
+        message_t *fwd = malloc(pkt_size);
+        if (fwd) {
+            memset(fwd, 0, pkt_size);
+            fwd->mq_type = 1;
+            strcpy(fwd->type, PROG_LOG_TYPE);
+            fwd->size = sizeof(prog_log_t);
+            memcpy(fwd->data, qmsg.data, sizeof(prog_log_t));
+            send_msg(recep_ip, recep_port, "outgoing", fwd);
+            free(fwd);
+            printf("[Controller] Log forwarded to receptionist %s:%d\n",
+                   recep_ip, recep_port);
+        }
+    }
+    return NULL;
+}
+
 void * request_master_ip_func(void * arg) {
     map_entry * request_master_ip_entry = (map_entry *)arg;
     queued_message qmsg;
@@ -674,10 +725,11 @@ void* state_receiver_thread_run(void* arg) {
 
     
     char * mq_statecapture_init_str = create_mq(STATECAPTURE_INIT_TYPE, sizeof(queued_message));
-    char * mq_statecapture_str = create_mq(STATECAPTURE_TYPE, sizeof(queued_message));    
+    char * mq_statecapture_str = create_mq(STATECAPTURE_TYPE, sizeof(queued_message));
     char * mq_hello_str = create_mq(HELLO_TYPE, sizeof(queued_message));
     char * mq_heartbeat_str = create_mq(HB_TYPE, sizeof(queued_message));
     char * mq_request_master_ip_str = create_mq(REQUEST_MASTER_IP_TYPE, sizeof(queued_message));
+    char * mq_prog_log_str = create_mq(PROG_LOG_TYPE, sizeof(queued_message));
 
     if (mq_statecapture_init_str == NULL) {
         perror("[StateReceiver] create_mq()");
@@ -689,6 +741,7 @@ void* state_receiver_thread_run(void* arg) {
     map_entry * hello_entry = find_by_msg_type(mq_hello_str);
     map_entry * heartbeat_entry = find_by_msg_type(mq_heartbeat_str);
     map_entry * request_master_ip_entry = find_by_msg_type(mq_request_master_ip_str);
+    map_entry * prog_log_entry = find_by_msg_type(mq_prog_log_str);
     
     if (!statecapture_init_entry) {
         fprintf(stderr, "[StateReceiver] STATECAPTURE_INIT queue not created \n");
@@ -722,13 +775,15 @@ void* state_receiver_thread_run(void* arg) {
     pthread_t heartbeat_thread;
     pthread_t heartbeat_monitor_thread;
     pthread_t request_master_ip_thread;
-    
+    pthread_t log_relay_thread;
+
     pthread_create(&statecapture_init_thread, NULL, statecapture_init_func, (void *)statecapture_init_entry);
     pthread_create(&statecapture_thread, NULL, statecapture_func, (void *)statecapture_entry);
     pthread_create(&hello_thread, NULL, hello_func, (void *)hello_entry);
     pthread_create(&get_xtics_thread, NULL, get_machine_xtics, NULL);
     pthread_create(&heartbeat_thread, NULL, heartbeat_receiver_func, (void *)heartbeat_entry);
     pthread_create(&request_master_ip_thread, NULL, request_master_ip_func, (void *)request_master_ip_entry);
+    pthread_create(&log_relay_thread, NULL, log_relay_func, (void *)prog_log_entry);
     
     // Start heartbeat monitor thread
     atomic_store(&heartbeat_monitor_running, 1);
