@@ -119,6 +119,7 @@ static void debug_print_sent_metrics(MachineMetrics *m, const char *msg_type) {
   printf("    • IP:        %s:%d\n", m->ip, m->port);
   printf("    • Timestamp: %s (%ld)\n", timestamp_str, m->timestamp);
   printf("    • Type:      %d\n", m->type);
+  printf("    • Role:      %d\n", m->role);
 
   printf("  ▼ CPU\n");
   printf("    • Usage:           %.2f%%\n", m->cpu_usage);
@@ -168,6 +169,7 @@ static void send_hello(void) {
   // Ensure UUID is set
   strncpy(msg.uuid, agent.uuid, sizeof(msg.uuid) - 1);
   msg.type = MSG_HELLO;
+  msg.role = agent.role;
   msg.timestamp = time(NULL);
 
   // Set IP and port dynamically

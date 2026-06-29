@@ -10,7 +10,6 @@
 #include "node.h"
 #include "../../parallax/state_message.h"
 #include "state_receiver.h"
-#include "persistence.h"
 #include "ms_queue.h"
 #include "network_agent.h"
 #include "../../Agent_Init/init.h"
@@ -45,25 +44,17 @@ static void register_node(MachineMetrics* msg) {
         node->status = NODE_ACTIF;
         node->last_heartbeat = time(NULL);
         
-        NodeInfo snapshot = *node;
         pthread_mutex_unlock(&g_node_table.lock);
-        persist_node_snapshot(&snapshot);
         return;
     }
 
     node = node_table_add(&g_node_table, msg->uuid, msg->ip, msg->port);
     if (node) {
-        node->role = msg->role;  // Store the role from the metrics
+        node->role = msg->role;
         printf("[StateReceiver] Nouveau nœud : uuid=%s ip=%s role=%d\n",
                node->uuid, node->ip, node->role);
-    }    // Snapshot initial sur disque (le pointeur de noeud est copié pour minimiser la zone critique)
-    if (node) {
-        NodeInfo snapshot = *node;
-        pthread_mutex_unlock(&g_node_table.lock);
-        persist_node_snapshot(&snapshot);
-    } else {
-        pthread_mutex_unlock(&g_node_table.lock);
     }
+    pthread_mutex_unlock(&g_node_table.lock);
 }
 
 MachineMetrics * get_all_active_workers(void) {
@@ -133,10 +124,103 @@ MachineMetrics * get_all_active_workers(void) {
 }
 
 
+/* Returns ALL nodes (every role) with status encoded in active_connections */
+static MachineMetrics *get_all_cluster_nodes(void) {
+    pthread_mutex_lock(&g_node_table.lock);
+
+    int count = 0;
+    for (NodeInfo *n = g_node_table.head; n; n = n->next) count++;
+
+    if (count == 0) {
+        pthread_mutex_unlock(&g_node_table.lock);
+        return NULL;
+    }
+
+    MachineMetrics *metrics = malloc((count + 1) * sizeof(MachineMetrics));
+    if (!metrics) {
+        pthread_mutex_unlock(&g_node_table.lock);
+        return NULL;
+    }
+    memset(metrics, 0, (count + 1) * sizeof(MachineMetrics));
+
+    int i = 0;
+    for (NodeInfo *curr = g_node_table.head; curr && i < count; curr = curr->next) {
+        strncpy(metrics[i].uuid, curr->uuid, sizeof(metrics[i].uuid) - 1);
+        strncpy(metrics[i].ip, curr->ip, sizeof(metrics[i].ip) - 1);
+        metrics[i].port       = curr->port;
+        metrics[i].role       = curr->role;
+        metrics[i].cpu_usage  = curr->metrics.cpu_usage;
+        metrics[i].mem_usage  = curr->metrics.ram_usage;
+        metrics[i].mem_used_mb  = curr->metrics.ram_used_mb;
+        metrics[i].disk_usage   = curr->metrics.disk_usage;
+        metrics[i].disk_used_mb = curr->metrics.disk_used_mb;
+        metrics[i].queue_len    = curr->metrics.queue_len;
+        metrics[i].score        = curr->metrics.score;
+        metrics[i].load_avg[0]  = curr->metrics.load_avg[0];
+        metrics[i].load_avg[1]  = curr->metrics.load_avg[1];
+        metrics[i].load_avg[2]  = curr->metrics.load_avg[2];
+        metrics[i].cpu_cores            = curr->hardware.cpu_cores;
+        metrics[i].cpu_threads_per_core = curr->hardware.cpu_threads_per_core;
+        metrics[i].cpu_freq_mhz         = curr->hardware.cpu_freq_mhz;
+        strncpy(metrics[i].cpu_model, curr->hardware.cpu_model, sizeof(metrics[i].cpu_model) - 1);
+        metrics[i].mem_total_mb  = curr->hardware.ram_total_mb;
+        metrics[i].disk_total_mb = curr->hardware.disk_total_gb;
+        strncpy(metrics[i].disk_mount, curr->hardware.disk_mount, sizeof(metrics[i].disk_mount) - 1);
+        strncpy(metrics[i].network_iface, curr->hardware.network_iface, sizeof(metrics[i].network_iface) - 1);
+        metrics[i].timestamp = curr->last_heartbeat;
+        /* Encode NodeStatus into active_connections (0=ACTIF,1=SUSPECT,2=EN_PANNE,...) */
+        metrics[i].active_connections = (int)curr->status;
+        i++;
+    }
+
+    pthread_mutex_unlock(&g_node_table.lock);
+    return metrics;
+}
+
+void *get_all_xtics(void *arg) {
+    (void)arg;
+    create_mq("ALL_NODES", sizeof(queued_message));
+    map_entry *mq = find_by_msg_type("ALL_NODES");
+    if (!mq) return NULL;
+
+    queued_message qmsg;
+    printf("[Controller] ALL_NODES handler started\n");
+    while (1) {
+        ssize_t ret = msgrcv(mq->queue_id, &qmsg, sizeof(qmsg) - sizeof(long),
+                             1L, IPC_NOWAIT);
+        if (ret == -1) { usleep(100000); continue; }
+
+        char reply_ip[16];
+        strncpy(reply_ip, qmsg.sender_ip, sizeof(reply_ip) - 1);
+        reply_ip[sizeof(reply_ip) - 1] = '\0';
+        int reply_port = qmsg.sender_port;
+        printf("[Controller] ALL_NODES query from %s:%d\n", reply_ip, reply_port);
+
+        MachineMetrics *metrics = get_all_cluster_nodes();
+        int count = 0;
+        if (metrics)
+            while (strlen(metrics[count].uuid) > 0) count++;
+
+        size_t payload_size = count * sizeof(MachineMetrics);
+        message_t *resp = malloc(sizeof(message_t) + payload_size);
+        if (!resp) { free(metrics); continue; }
+        memset(resp, 0, sizeof(message_t) + payload_size);
+        strncpy(resp->type, qmsg.recv_type, sizeof(resp->type) - 1);
+        resp->size = payload_size;
+        if (payload_size > 0)
+            memcpy(resp->data, metrics, payload_size);
+        free(metrics);
+
+        send_msg(reply_ip, reply_port, "outgoing", resp);
+        free(resp);
+    }
+    return NULL;
+}
+
 void * get_machine_xtics(void * arg){
     
     (void)arg;
-    char * get_nodes_type = create_mq("NODES", sizeof(queued_message));
+    create_mq("NODES", sizeof(queued_message));
     map_entry * node_query_mq = find_by_msg_type("NODES");
     if (!node_query_mq) return NULL;
 
@@ -267,7 +351,6 @@ static void update_heartbeat(MachineHeartbeat* hb, const char* sender_ip, int se
     if (!hb || strlen(hb->uuid) == 0) return;
     pthread_mutex_lock(&g_node_table.lock);
 
-    int newly_registered = 0;
     NodeInfo* node = node_table_find(&g_node_table, hb->uuid);
     if (!node) {
         printf("[HEARTBEAT] ⚠ Heartbeat from unknown node %s, auto-registering...\n", hb->uuid);
@@ -277,7 +360,6 @@ static void update_heartbeat(MachineHeartbeat* hb, const char* sender_ip, int se
             return;
         }
         node->role = hb->role;
-        newly_registered = 1;
     }
     
     // Update only status, role, and heartbeat timestamp (do not overwrite IP/port for already registered nodes)
@@ -290,13 +372,7 @@ static void update_heartbeat(MachineHeartbeat* hb, const char* sender_ip, int se
     printf("[HEARTBEAT] Heartbeat from %s - last_heartbeat updated (status: %d, ip: %s, port: %d)\n", 
            hb->uuid, node->status, node->ip, node->port);
 
-    if (newly_registered) {
-        NodeInfo snapshot = *node;
-        pthread_mutex_unlock(&g_node_table.lock);
-        persist_node_snapshot(&snapshot);
-    } else {
-        pthread_mutex_unlock(&g_node_table.lock);
-    }
+    pthread_mutex_unlock(&g_node_table.lock);
 }
 
 /**
@@ -342,16 +418,7 @@ static void update_metrics(MachineMetrics* msg) {
     // (La détection précise de surcharge/panne sera gérée par un autre module)
     node->status = NODE_ACTIF;
 
-    // Copie locale pour sortir de la section critique avant l'I/O asynchrone
-    char        uuid_copy[64];
-    time_t      ts    = node->last_heartbeat;
-    NodeMetrics mcopy = node->metrics;
-    strncpy(uuid_copy, node->uuid, sizeof(uuid_copy) - 1);
-
     pthread_mutex_unlock(&g_node_table.lock);
-
-    // Buffer RAM — flush asynchrone par le thread flusher
-    metrics_buf_push(uuid_copy, ts, &mcopy);
 }
 
 /**
@@ -412,20 +479,7 @@ static void init_metrics(MachineMetrics* msg) {
     node->metrics.score     = msg->score;
     node->status            = NODE_ACTIF;
 
-    // Copie locale avant de libérer le mutex
-    NodeInfo snapshot = *node;
-    char        uuid_copy[64];
-    time_t      ts    = node->last_heartbeat;
-    NodeMetrics mcopy = node->metrics;
-    strncpy(uuid_copy, node->uuid, sizeof(uuid_copy) - 1);
-
     pthread_mutex_unlock(&g_node_table.lock);
-
-    // Snapshot hardware sur disque (une seule fois)
-    persist_node_snapshot(&snapshot);
-
-    // Métriques initiales dans le buffer RAM
-    metrics_buf_push(uuid_copy, ts, &mcopy);
 }
 
 
@@ -715,8 +769,6 @@ void* state_receiver_thread_run(void* arg) {
     //  On suppose le contrôleur toujours actif, et on reconstruit la RAM en temps réel 
     //  à partir des messages reçus).
 
-    // Démarre le thread de persistence disque
-    flusher_start();
 
     // Ouverture de la file de messages IPC via le network_agent
  
@@ -730,6 +782,7 @@ void* state_receiver_thread_run(void* arg) {
     char * mq_heartbeat_str = create_mq(HB_TYPE, sizeof(queued_message));
     char * mq_request_master_ip_str = create_mq(REQUEST_MASTER_IP_TYPE, sizeof(queued_message));
     char * mq_prog_log_str = create_mq(PROG_LOG_TYPE, sizeof(queued_message));
+    (void)mq_prog_log_str;
 
     if (mq_statecapture_init_str == NULL) {
         perror("[StateReceiver] create_mq()");
@@ -772,6 +825,7 @@ void* state_receiver_thread_run(void* arg) {
     pthread_t statecapture_thread;
     pthread_t hello_thread;
     pthread_t get_xtics_thread;
+    pthread_t get_all_xtics_thread;
     pthread_t heartbeat_thread;
     pthread_t heartbeat_monitor_thread;
     pthread_t request_master_ip_thread;
@@ -781,6 +835,7 @@ void* state_receiver_thread_run(void* arg) {
     pthread_create(&statecapture_thread, NULL, statecapture_func, (void *)statecapture_entry);
     pthread_create(&hello_thread, NULL, hello_func, (void *)hello_entry);
     pthread_create(&get_xtics_thread, NULL, get_machine_xtics, NULL);
+    pthread_create(&get_all_xtics_thread, NULL, get_all_xtics, NULL);
     pthread_create(&heartbeat_thread, NULL, heartbeat_receiver_func, (void *)heartbeat_entry);
     pthread_create(&request_master_ip_thread, NULL, request_master_ip_func, (void *)request_master_ip_entry);
     pthread_create(&log_relay_thread, NULL, log_relay_func, (void *)prog_log_entry);
@@ -814,6 +869,5 @@ void state_receiver_stop(void) {
     heartbeat_monitor_stop();  // Stop the heartbeat monitor thread
     // pthread_join is done in init.c (the caller who created this thread)
     
-    flusher_stop();    // flush final + arrêt du thread de persistence
     node_table_destroy(&g_node_table);
 }
