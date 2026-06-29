@@ -201,15 +201,29 @@ void *get_all_xtics(void *arg) {
         if (metrics)
             while (strlen(metrics[count].uuid) > 0) count++;
 
-        size_t payload_size = count * sizeof(MachineMetrics);
+        /* Append the controller's own entry */
+        int total = count + 1;
+        MachineMetrics *all = realloc(metrics, (total + 1) * sizeof(MachineMetrics));
+        if (!all) { free(metrics); continue; }
+        memset(&all[count], 0, sizeof(MachineMetrics));
+        strncpy(all[count].uuid, get_agent_uuid(), sizeof(all[count].uuid) - 1);
+        char ctrl_iface[16] = {0};
+        load_network_interface(ctrl_iface, sizeof(ctrl_iface));
+        get_local_ip(all[count].ip, sizeof(all[count].ip), ctrl_iface);
+        all[count].port             = 9000;
+        all[count].role             = ROLE_CONTROLLER;
+        all[count].active_connections = NODE_ACTIF;
+        all[count].timestamp        = time(NULL);
+        memset(&all[total], 0, sizeof(MachineMetrics)); /* sentinel */
+
+        size_t payload_size = total * sizeof(MachineMetrics);
         message_t *resp = malloc(sizeof(message_t) + payload_size);
-        if (!resp) { free(metrics); continue; }
+        if (!resp) { free(all); continue; }
         memset(resp, 0, sizeof(message_t) + payload_size);
         strncpy(resp->type, qmsg.recv_type, sizeof(resp->type) - 1);
         resp->size = payload_size;
-        if (payload_size > 0)
-            memcpy(resp->data, metrics, payload_size);
-        free(metrics);
+        memcpy(resp->data, all, payload_size);
+        free(all);
 
         send_msg(reply_ip, reply_port, "outgoing", resp);
         free(resp);
