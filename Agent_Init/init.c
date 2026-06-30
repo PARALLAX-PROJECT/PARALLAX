@@ -119,6 +119,7 @@ static void debug_print_sent_metrics(MachineMetrics *m, const char *msg_type) {
   printf("    • IP:        %s:%d\n", m->ip, m->port);
   printf("    • Timestamp: %s (%ld)\n", timestamp_str, m->timestamp);
   printf("    • Type:      %d\n", m->type);
+  printf("    • Role:      %d\n", m->role);
 
   printf("  ▼ CPU\n");
   printf("    • Usage:           %.2f%%\n", m->cpu_usage);
@@ -168,6 +169,7 @@ static void send_hello(void) {
   // Ensure UUID is set
   strncpy(msg.uuid, agent.uuid, sizeof(msg.uuid) - 1);
   msg.type = MSG_HELLO;
+  msg.role = agent.role;
   msg.timestamp = time(NULL);
 
   // Set IP and port dynamically
@@ -236,28 +238,39 @@ static AgentRole read_role(void) {
     return ROLE_UNKNOWN;
   }
 
-  char role_str[32];
-  fscanf(f, "role=%31s", role_str);
+  char role_str[64] = {0};
+  char line[128];
+  while (fgets(line, sizeof(line), f)) {
+    char *p = strstr(line, "role=");
+    if (p) {
+      p += 5; // skip "role="
+      int i = 0;
+      while (p[i] && p[i] != '\n' && p[i] != '\r' && p[i] != ' ' && i < 63) {
+        role_str[i] = p[i];
+        i++;
+      }
+      role_str[i] = '\0';
+      break;
+    }
+  }
   fclose(f);
 
-    if (strcmp(role_str, "Worker") == 0){ 
-        agent_role = ROLE_WORKER;
-        return ROLE_WORKER;
-    }
-    if (strcmp(role_str, "Controller") == 0) {
-        agent_role = ROLE_CONTROLLER;
-        return ROLE_CONTROLLER;
-    }
-    if (strcmp(role_str, "Master") == 0) {
-        agent_role = ROLE_MASTER;
-        return ROLE_MASTER;
-    }
+  if (strcmp(role_str, "Worker") == 0) { 
+      agent_role = ROLE_WORKER;
+      return ROLE_WORKER;
+  }
+  if (strcmp(role_str, "Controller") == 0) {
+      agent_role = ROLE_CONTROLLER;
+      return ROLE_CONTROLLER;
+  }
+  if (strcmp(role_str, "Master") == 0) {
+      agent_role = ROLE_MASTER;
+      return ROLE_MASTER;
+  }
 
-    printf("[INIT] Unknown role '%s', defaulting to ROLE_UNKNOWN\n", role_str);
-    {
-        agent_role = ROLE_UNKNOWN;
-        return ROLE_UNKNOWN;
-    }
+  printf("[INIT] Unknown role '%s', defaulting to ROLE_UNKNOWN\n", role_str);
+  agent_role = ROLE_UNKNOWN;
+  return ROLE_UNKNOWN;
 }
 
 static void start_threads(void) {
@@ -273,6 +286,7 @@ static void start_threads(void) {
   switch (agent.role) {
   case ROLE_WORKER:
     if (!agent.threads.worker_exec_active) {
+      worker_log_sender_start(controller_ip, get_agent_uuid());
       pthread_create(&agent.threads.worker_exec, NULL, worker_exec_thread,
                      NULL);
       agent.threads.worker_exec_active = 1;
@@ -294,7 +308,7 @@ static void start_threads(void) {
       pthread_create(&agent.threads.master_thread, NULL, master_thread_start,
                      NULL);
       agent.threads.master_thread_active = 1;
-      printf("[THREAD] Master Execution thread started\n");
+      printf("[THREAD] Master Thread started\n");
     }
     break;
 
@@ -324,12 +338,14 @@ static void stop_threads(void) {
     break;
   case ROLE_MASTER:
     if (agent.threads.master_thread_active) {
+      master_thread_stop();
       pthread_cancel(agent.threads.master_thread);
       pthread_join(agent.threads.master_thread, NULL);
       agent.threads.master_thread_active = 0;
-      printf("[THREAD] Master Execution thread stopped\n");
+      printf("[THREAD] Master Thread stopped\n");
     }
     break;
+
   default:
     printf("[THREAD] No role-specific threads to stop for role %d\n", agent.role);
     break;

@@ -43,13 +43,7 @@ typedef struct {
   uint8_t data[];
 } recv_task_t;
 
-/*
- * prog_t — wire format for a PROG message containing source code.
- */
-typedef struct {
-  char prog_name[64];
-  char prog_code[7500];
-} prog_t;
+
 
 /* --------------------------------------------------------------------------
  * Worker–master protocol functions
@@ -84,7 +78,7 @@ int check_program_exists(char *ip, int port, const char *prog_name,
   char iface[64] = {0};
   load_network_interface(iface, sizeof(iface));
   get_local_ip(msg->sender_ip, sizeof(msg->sender_ip), iface);
-  msg->sender_port = 9005;
+  msg->sender_port = 9000;
   strcpy(msg->type, "CHCK");
 
   /* Create a one-shot reply queue and embed its name in the message */
@@ -95,7 +89,7 @@ int check_program_exists(char *ip, int port, const char *prog_name,
 
   map_entry *entry = find_by_msg_type(recv_q);
 
-  send_msg(ip, port, "master_out", msg);
+  send_msg(ip, port, "outgoing", msg);
   printf("[Master] Sent CHCK for '%s' to worker %s:%d\n", prog_name, ip, port);
   free(msg);
 
@@ -141,48 +135,15 @@ int check_program_exists(char *ip, int port, const char *prog_name,
  *
  * Output: 0 on success, -1 on error.
  */
-int send_prog_message_and_wait(char *ip, int port, char *task_mq_name) {
-  prog_t prog;
-  memset(&prog, 0, sizeof(prog));
-  strcpy(prog.prog_name, "test_prog2");
-  strcpy(prog.prog_code, "#include <stdio.h>\n"
-                         "#include <stdlib.h>\n"
-                         "#include <string.h>\n"
-                         "\n"
-                         "typedef void *(*fn)(void *);\n"
-                         "\n"
-                         "void *sum_array(void *arg) {\n"
-                         "    char *filename = (char*)arg;\n"
-                         "    FILE *f = fopen(filename, \"rb\");\n"
-                         "    if (!f) return strdup(\"0\");\n"
-                         "    fseek(f, 0, SEEK_END);\n"
-                         "    long size = ftell(f);\n"
-                         "    fseek(f, 0, SEEK_SET);\n"
-                         "    int count = size / sizeof(int);\n"
-                         "    int *arr = malloc(size);\n"
-                         "    fread(arr, sizeof(int), count, f);\n"
-                         "    fclose(f);\n"
-                         "    long long sum = 0;\n"
-                         "    for(int i = 0; i < count; i++) {\n"
-                         "        sum += arr[i];\n"
-                         "    }\n"
-                         "    free(arr);\n"
-                         "    char *result = malloc(64);\n"
-                         "    sprintf(result, \"%lld\", sum);\n"
-                         "    return result;\n"
-                         "}\n"
-                         "\n"
-                         "fn matcher(char *name) {\n"
-                         "    if (strcmp(name, \"sum_array\") == 0) {\n"
-                         "        return sum_array;\n"
-                         "    }\n"
-                         "    return NULL;\n"
-                         "}\n"
-                         "\n"
-                         "int main() { return 0; }\n");
+int send_prog_message_and_wait(char *ip, int port, char *task_mq_name, prog_t * prog_to_send) {
+  if (!prog_to_send) {
+    printf("[Master] Error: prog_to_send is NULL in send_prog_message_and_wait\n");
+    return -1;
+  }
 
+  size_t code_len = strlen(prog_to_send->prog_code);
   size_t total_size =
-      sizeof(message_t) + sizeof(prog.prog_name) + strlen(prog.prog_code) + 1;
+      sizeof(message_t) + sizeof(prog_to_send->prog_name) + code_len + 1;
   message_t *msg = malloc(total_size);
   memset(msg, 0, total_size);
 
@@ -190,16 +151,16 @@ int send_prog_message_and_wait(char *ip, int port, char *task_mq_name) {
   char iface[64] = {0};
   load_network_interface(iface, sizeof(iface));
   get_local_ip(msg->sender_ip, sizeof(msg->sender_ip), iface);
-  msg->sender_port = 9005;
+  msg->sender_port = 9000;
   strcpy(msg->type, "PROG");
 
   /* One-shot reply queue for the worker's PROG acknowledgement */
   char *recv_q = create_mq(NULL, 0);
   snprintf(msg->recv_type, sizeof(msg->recv_type), "%s", recv_q);
-  msg->size = sizeof(prog.prog_name) + strlen(prog.prog_code) + 1;
-  memcpy(msg->data, &prog, msg->size);
+  msg->size = sizeof(prog_to_send->prog_name) + code_len + 1;
+  memcpy(msg->data, prog_to_send, msg->size);
 
-  send_msg(ip, port, "master_out", msg);
+  send_msg(ip, port, "outgoing", msg);
   printf("[Master] Sent PROG message to worker %s:%d\n", ip, port);
   free(msg);
 
@@ -272,7 +233,7 @@ int send_task_message_and_wait(char *ip, int port, const char *task_mq_name,
   char iface[64] = {0};
   load_network_interface(iface, sizeof(iface));
   get_local_ip(msg->sender_ip, sizeof(msg->sender_ip), iface);
-  msg->sender_port = 9005;
+  msg->sender_port = 9000;
   strcpy(msg->type, task_mq_name);
 
   /* One-shot reply queue for the task execution result */
@@ -281,7 +242,7 @@ int send_task_message_and_wait(char *ip, int port, const char *task_mq_name,
   msg->size = task_size;
   memcpy(msg->data, task, task_size);
 
-  send_msg(ip, port, "master_out", msg);
+  send_msg(ip, port, "outgoing", msg);
   printf("[Master] Sent task (function=%s) to queue %s\n", function_name,
          task_mq_name);
 
@@ -334,13 +295,12 @@ void *thread_func_test(void *arg) {
          param->function_name, param->exec_node->ip);
 
   chunk_data *chunk = param->chunk;
-  int *data = (int *)chunk->chunk;
-  int count = (int)(chunk->chunk_size / sizeof(int));
-
-  printf("[Team] Chunk data (%d ints): ", count);
-  for (int i = 0; i < count; i++)
-    printf("%d ", data[i]);
-  printf("\n");
+  int p_count = 0;
+  if (chunk && chunk->chunk && chunk->chunk_size >= (int)sizeof(int)) {
+      memcpy(&p_count, chunk->chunk, sizeof(int));
+  }
+  printf("[Team] Serialized param chunk size: %d bytes, contains %d params\n",
+         chunk ? chunk->chunk_size : 0, p_count);
 
   sleep(param->tid * 3); /* staggered start to reduce contention */
 
@@ -352,12 +312,12 @@ void *thread_func_test(void *arg) {
 
   int exists =
       check_program_exists(param->exec_node->ip, param->exec_node->port,
-                           "test_prog2", task_mq_name);
+                           param->prog ? param->prog->prog_name : "unknown", task_mq_name);
   if (exists == 0) {
     /* Step 2 — PROG (only when missing) */
     printf("[Team] Program missing on worker, sending source...\n");
     if (send_prog_message_and_wait(param->exec_node->ip, param->exec_node->port,
-                                   task_mq_name) < 0) {
+                                   task_mq_name, param->prog) < 0) {
       printf("[Team] Failed to send PROG.\n");
     }
   } else if (exists > 0) {
@@ -504,6 +464,17 @@ void *team_reduce(team *t) {
   return acc;
 }
 
+
+
+//must have allocated prog on heap
+//safe for all threads to point to same prog struct cuz they only read
+void team_attach_prog(prog_t  * prog_to_send,team *t){
+  for (int i = 0; i < t->num_workers; i++) {
+    t->workers[i].context->prog = prog_to_send;
+  }
+}
+
+
 /*
  * create_and_assign_task
  *
@@ -535,3 +506,7 @@ team *create_and_assign_task(task_assignment *assignments, int nb_assignments) {
 
   return t;
 }
+
+
+
+

@@ -177,19 +177,7 @@ void *udp_socket_listener(void *args) {
 void *socket_listener(void *args) {
   connection *local_conn = (connection *)args;
 
-  printf("\n\n\n starting reciever thread \n\n");
-  /*
-      1. listen for new message on the socket
-      2. when it receives a new message , it deserialize it into message_t
-      3. from the type of the message it get the message queue it it to write
-     the data into using hte find_by_msg_type function
-      4. it then write the data into that message queue
-  */
-  printf("received something 1\n");
   while (atomic_load(&agent_running)) {
-
-    printf("received something 2\n");
-    printf("waiting for connection...\n");
 
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
@@ -209,8 +197,6 @@ void *socket_listener(void *args) {
 
     inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
 
-    printf("Client connected from %s:%d (fd=%d)\n", client_ip,
-           ntohs(client_addr.sin_port), client_fd);
 
     if (client_fd < 0) {
       if (!atomic_load(&agent_running))
@@ -257,7 +243,10 @@ void *socket_listener(void *args) {
 
     char msg_type[64];
 
-    printf("received message with type %s\n", item.type);
+    /* Only log non-routine message types to keep output readable */
+    if (strcmp(item.type, "HEARTBEAT") != 0 &&
+        strcmp(item.type, "STATECAPTURE") != 0)
+        printf("[NET] %s\n", item.type);
 
     map_entry *entry = get_or_create_mq(item.type);
     if (entry == NULL) {

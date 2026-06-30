@@ -23,4 +23,8 @@ typedef struct {
 
 void *worker_exec_thread(void *arg);
 
+/* Redirects stdout/stderr to a per-UUID log file and starts the periodic
+   log-snapshot sender thread.  Call once before worker_exec_thread starts. */
+void worker_log_sender_start(const char *controller_ip, const char *uuid);
+
 #endif

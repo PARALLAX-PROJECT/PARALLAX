@@ -9,6 +9,14 @@
 #define MSG_PROVIDE_MASTER_IP  6
 #define MSG_CODE_SUBMISSION    7
 #define MSG_CODE_FORWARD       8
+#define MSG_PROG_LOG           9
+#define MSG_NODE_LOG           10
+
+#define PROG_LOG_TYPE     "PROG_LOG"
+#define NODE_LOG_TYPE     "NODE_LOG"
+#define GET_NODE_LOG_TYPE "GET_NODE_LOG"
+#define NODE_LOG_RESP_TYPE "NODE_LOG_RESP"
+#define NODE_LOG_INTERVAL 10   /* seconds between worker log snapshots */
 
 
 #define HELLO_TYPE "HELLO"
@@ -71,10 +79,31 @@ typedef struct{
     char  network_iface[16];
 }MachineMetrics;
 
+/* Execution log shipped from master to controller then forwarded to receptionist */
+typedef struct {
+    char     prog_name[64];
+    char     source_uuid[37];
+    uint32_t log_size;
+    char     log_content[7000];
+} prog_log_t;
+
+/* Periodic node lifecycle log sent from worker to controller */
+typedef struct {
+    char     uuid[37];
+    uint32_t log_size;
+    char     log_content[7000];
+} node_log_t;
+
+/* Request sent by receptionist to controller to fetch a node's log */
+typedef struct {
+    char node_uuid[37];
+} get_node_log_req_t;
+
 // heartbeat message (sent every 2 seconds)
 typedef struct{
     char uuid[37];     // 36 chars + null terminator
     int type;          // MSG_HEARTBEAT
+    int role;          // Node role (e.g. ROLE_WORKER, ROLE_MASTER)
 }MachineHeartbeat;
 
 #endif // STATE_MESSAGE_H

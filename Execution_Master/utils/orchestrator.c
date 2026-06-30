@@ -1,15 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "orchestrator.h"
 #include "../../parallax/state_message.h" // Contient la structure MachineMetrics
+#include "../../parallax/parallax_param.h"
 
 #define MOCK_NODE_COUNT 4
 
 /**
  * Génère un tableau de fausses métriques de machines pour simuler le cluster.
- * Remplace l'ancien get_node_details().
  */
 MachineMetrics *get_mock_machine_metrics() {
     MachineMetrics *metrics = malloc(sizeof(MachineMetrics) * MOCK_NODE_COUNT);
@@ -32,13 +33,13 @@ MachineMetrics *get_mock_machine_metrics() {
         metrics[i].cpu_freq_mhz = 3200.0f;
         strcpy(metrics[i].cpu_model, "Mock CPU");
         metrics[i].mem_total_mb = 16000;
-        metrics[i].disk_total_mb = 512 * 1024; // Converti en Mo pour correspondre à la structure
+        metrics[i].disk_total_mb = 512 * 1024;
         strcpy(metrics[i].disk_mount, "/");
         strcpy(metrics[i].network_iface, "lo");
 
         // Métriques dynamiques (simulées)
-        metrics[i].cpu_usage = 0.10f * i; // Charge CPU croissante d'une machine à l'autre
-        metrics[i].mem_usage = 0.20f;     // 20% d'utilisation RAM constante
+        metrics[i].cpu_usage = 0.10f * i;
+        metrics[i].mem_usage = 0.20f;
         metrics[i].mem_used_mb = 3200;
         metrics[i].mem_available_mb = 12800.0f;
 
@@ -57,19 +58,76 @@ MachineMetrics *get_mock_machine_metrics() {
     return metrics;
 }
 
+/* Helper to serialize a ParallaxParam list plus parameter data payloads */
+static void *serialize_params(ParallaxParam *params, int param_count, size_t *out_size) {
+    size_t total_size = sizeof(int);
+    for (int i = 0; i < param_count; i++) {
+        total_size += sizeof(ParallaxParam);
+        if (params[i].size > 0 && params[i].data) {
+            total_size += params[i].size;
+        }
+    }
+
+    void *buf = malloc(total_size);
+    if (!buf) {
+        *out_size = 0;
+        return NULL;
+    }
+
+    char *ptr = (char *)buf;
+    // 1. Write param count
+    memcpy(ptr, &param_count, sizeof(int));
+    ptr += sizeof(int);
+
+    // 2. Write metadata and data for each param
+    for (int i = 0; i < param_count; i++) {
+        memcpy(ptr, &params[i], sizeof(ParallaxParam));
+        ptr += sizeof(ParallaxParam);
+        if (params[i].size > 0 && params[i].data) {
+            memcpy(ptr, params[i].data, params[i].size);
+            ptr += params[i].size;
+        }
+    }
+
+    *out_size = total_size;
+    return buf;
+}
+
 /**
  * Crée une répartition de tâches (task_assignment) équilibrée par nœud.
- * Utilise directement la structure MachineMetrics reçue du StateReceiver.
+ * Segmente et sérialise les paramètres selon leur type de distribution.
  */
 task_assignment *create_assignments(
-    void *data,
-    size_t total_size,
+    ParallaxParam *params,
+    int param_count,
     const char *function,
     MachineMetrics *metrics,
     int node_count
 ) {
-    // 1. Validations de sécurité initiales (utilisation exclusive de metrics)
-    if (!data || !metrics || node_count <= 0) {
+    if (!params || param_count <= 0 || !metrics || node_count <= 0) {
+        return NULL;
+    }
+
+    // 1. Locate SCATTER param and its SIZE_OF companion
+    int scatter_idx = -1;
+    int size_idx = -1;
+    for (int p = 0; p < param_count; p++) {
+        if (params[p].distribution == PARALLAX_SCATTER) {
+            scatter_idx = p;
+        } else if (params[p].distribution == PARALLAX_SIZE_OF) {
+            size_idx = p;
+        }
+    }
+
+    if (scatter_idx < 0) {
+        fprintf(stderr, "[Orchestrator] Error: No SCATTER parameter found!\n");
+        return NULL;
+    }
+
+    void *scatter_data = params[scatter_idx].data;
+    size_t scatter_size = params[scatter_idx].size;
+    if (!scatter_data || scatter_size <= 0) {
+        fprintf(stderr, "[Orchestrator] Error: SCATTER parameter has no data or size!\n");
         return NULL;
     }
 
@@ -88,67 +146,86 @@ task_assignment *create_assignments(
 
     // 2. Calcul des poids basés sur les métriques dynamiques réelles
     for (int i = 0; i < node_count; i++) {
-        // CPU libre = 1.0 - fraction consommée
         float available_cpu = 1.0f - metrics[i].cpu_usage;
-        // RAM libre = 1.0 - fraction consommée
         float available_ram = 1.0f - metrics[i].mem_usage;
 
-        /*
-         * Moyenne pondérée standard :
-         * 60% d'importance attribuée au CPU disponible
-         * 40% d'importance attribuée à la RAM disponible
-         */
         weights[i] = (available_cpu * 0.6f) + (available_ram * 0.4f);
-
-        // Sécurité pour éviter un poids à zéro si une machine est à genoux
         if (weights[i] < 0.01f) {
             weights[i] = 0.01f;
         }
-
         total_weight += weights[i];
     }
 
-    /*
-     * 3. Découpage du jeu de données
-     * IMPORTANT : Le découpage se fait ici par éléments (int) et non par octets directs
-     */
-    int *base = (int *)data;
-    size_t total_elements = total_size / sizeof(int);
-    size_t offset = 0;
+    // Determine element size for the SCATTER pointer
+    size_t elem_size = sizeof(int); // default
+    if (strstr(params[scatter_idx].type_name, "double")) {
+        elem_size = sizeof(double);
+    } else if (strstr(params[scatter_idx].type_name, "float")) {
+        elem_size = sizeof(float);
+    } else if (strstr(params[scatter_idx].type_name, "char")) {
+        elem_size = sizeof(char);
+    } else if (strstr(params[scatter_idx].type_name, "short")) {
+        elem_size = sizeof(short);
+    } else if (strstr(params[scatter_idx].type_name, "long")) {
+        elem_size = sizeof(long);
+    }
 
+    size_t total_elements = scatter_size / elem_size;
+    size_t offset_elements = 0;
+
+    // 3. Segment and serialize parameters for each node
     for (int i = 0; i < node_count; i++) {
         float ratio = weights[i] / total_weight;
+        size_t portion_elements = (size_t)(total_elements * ratio);
 
-        // Nombre d'éléments entiers attribués à cette machine
-        size_t portion = (size_t)(total_elements * ratio);
-
-        // Le dernier nœud ramasse le reliquat pour éviter les pertes dues aux arrondis
+        // Last node takes the remainder
         if (i == node_count - 1) {
-            portion = total_elements - offset;
+            portion_elements = total_elements - offset_elements;
         }
 
-        // Construction du Chunk de données
+        size_t portion_bytes = portion_elements * elem_size;
+        size_t offset_bytes = offset_elements * elem_size;
+
+        // Build worker-specific parameters list
+        ParallaxParam *local_params = malloc(sizeof(ParallaxParam) * param_count);
+        memcpy(local_params, params, sizeof(ParallaxParam) * param_count);
+
+        // Customize the SCATTER parameter
+        local_params[scatter_idx].data = (char *)scatter_data + offset_bytes;
+        local_params[scatter_idx].size = portion_bytes;
+
+        // Customize the SIZE_OF parameter if present
+        union {
+            size_t sz;
+            int i;
+            long l;
+            char bytes[8];
+        } comp_val;
+        comp_val.sz = portion_bytes;
+
+        if (size_idx >= 0) {
+            local_params[size_idx].data = &comp_val;
+        }
+
+        // Serialize the local parameters into a single chunk
+        size_t serialized_size = 0;
+        void *serialized_buf = serialize_params(local_params, param_count, &serialized_size);
+
         chunk_data *chunk = malloc(sizeof(chunk_data));
-        if (!chunk) {
-            continue;
+        if (chunk) {
+            chunk->chunk = serialized_buf;
+            chunk->chunk_size = (int)serialized_size;
         }
-        chunk->chunk = &base[offset];
-        chunk->chunk_size = portion * sizeof(int); // Taille convertie en octets pour l'envoi réseau
 
-        // Construction du descripteur de tâche
         task_descriptor *task = malloc(sizeof(task_descriptor));
-        if (!task) {
-            free(chunk);
-            continue;
+        if (task) {
+            strncpy(task->function_name, function, sizeof(task->function_name) - 1);
+            task->function_name[sizeof(task->function_name) - 1] = '\0';
         }
-
-        strncpy(task->function_name, function, sizeof(task->function_name) - 1);
-        task->function_name[sizeof(task->function_name) - 1] = '\0';
 
         assignments[i].task = task;
         assignments[i].chunk = chunk;
 
-        // Construction de l'adresse de destination (WorkerNode) à partir de MachineMetrics
         worker_node *wn = malloc(sizeof(worker_node));
         if (wn) {
             snprintf(wn->uuid, sizeof(wn->uuid), "%s", metrics[i].uuid);
@@ -157,8 +234,8 @@ task_assignment *create_assignments(
             assignments[i].target_node = wn;
         }
 
-        // Avancement de l'index dans le grand tableau de données initial
-        offset += portion;
+        free(local_params);
+        offset_elements += portion_elements;
     }
 
     free(weights);
